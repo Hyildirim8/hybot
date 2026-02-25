@@ -1,0 +1,54 @@
+
+# controllers.yaml — ros2_control controller configuration for ecza-robotu.
+#
+# Loaded by controller_manager at startup.
+# Geometry values must stay in sync with rover_params.yaml.
+#
+# mecanum_drive_controller reference:
+#   https://control.ros.org/humble/doc/ros2_controllers/mecanum_drive_controller/doc/userdoc.html
+
+controller_manager:
+  ros__parameters:
+    update_rate: 50  # Hz — control loop rate
+
+    mecanum_drive_controller:
+      type: mecanum_drive_controller/MecanumDriveController
+
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # ── mecanum_drive_controller parameters (pre-loaded in CM namespace) ──────
+    # These must live here so ros2_control_node pre-declares them before
+    # the controller plugin calls declare_params() during init.
+    # The controller's ParamListener reads them via the CM's parameter interface.
+
+mecanum_drive_controller:
+  ros__parameters:
+    # ── Wheel joint names ─────────────────────────────────────────────────────
+    front_left_wheel_command_joint_name:  "fl_wheel_joint"
+    front_right_wheel_command_joint_name: "fr_wheel_joint"
+    rear_left_wheel_command_joint_name:   "rl_wheel_joint"
+    rear_right_wheel_command_joint_name:  "rr_wheel_joint"
+    front_left_wheel_state_joint_name:    "fl_wheel_joint"
+    front_right_wheel_state_joint_name:   "fr_wheel_joint"
+    rear_left_wheel_state_joint_name:     "rl_wheel_joint"
+    rear_right_wheel_state_joint_name:    "rr_wheel_joint"
+
+    # ── Rover kinematics ──────────────────────────────────────────────────────
+    # wheels_radius: physical wheel radius in metres (rover_params.yaml: 0.08)
+    # sum_of_robot_center_projection_on_X_Y_axis: lx + ly
+    #   lx = wheel_base / 2            = 0.38 / 2 = 0.19 m
+    #   ly = wheel_separation_width / 2 = 0.26 / 2 = 0.13 m
+    #   sum                            = 0.19 + 0.13 = 0.32 m
+    kinematics:
+      wheels_radius: 0.08
+      sum_of_robot_center_projection_on_X_Y_axis: 0.32
+
+    # ── Odometry ──────────────────────────────────────────────────────────────
+    odom_frame_id: odom
+    base_frame_id: base_link
+    enable_odom_tf: true
+    open_loop: false           # use wheel encoder feedback for odometry
+
+    # ── cmd_vel timeout ───────────────────────────────────────────────────────
+    reference_timeout: 0.5     # seconds — stop if no cmd_vel received

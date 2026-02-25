@@ -71,7 +71,12 @@ RUN apt-get update -qq && \
         ros-humble-xacro \
         ros-humble-robot-state-publisher \
         ros-humble-joint-state-publisher \
-        ros-humble-rviz2 && \
+        ros-humble-rviz2 \
+        ros-humble-ros2-control \
+        ros-humble-ros2-controllers \
+        ros-humble-mecanum-drive-controller \
+        ros-humble-topic-based-ros2-control \
+        ros-humble-controller-manager && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root operator user UID 1000.

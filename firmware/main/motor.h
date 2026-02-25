@@ -26,9 +26,9 @@
 #define PWM_MAX_TICKS       1023u
 
 /** Maximum angular speed in rad/s — used for duty-cycle mapping (FR-009).
- *  Matched to max_linear_speed/wheel_radius: 1.5 m/s ÷ 0.05 m = 30 rad/s.
+ *  Matched to max_linear_speed/wheel_radius: 1.5 m/s ÷ 0.08 m = 18.75 rad/s.
  *  Override via NVS key "max_speed_rads" at provisioning time.             */
-#define MAX_SPEED_RAD_S     30.0f
+#define MAX_SPEED_RAD_S     18.75f
 
 /* ─── GPIO pin assignments ───────────────────────────────────────────────── */
 /* Configurable at compile time via Kconfig (firmware/main/Kconfig.projbuild).

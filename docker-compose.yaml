@@ -33,6 +33,7 @@ x-ros-service: &ros-service
 x-config-mount: &config-mount
   - ./config/rover_params.yaml:/config/rover_params.yaml:ro
   - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+  - ./config/controllers.yaml:/config/controllers.yaml:ro
 
 # ---------------------------------------------------------------------------
 # Services
@@ -68,18 +69,6 @@ services:
     depends_on:
       - joy
 
-  # ── kinematics ────────────────────────────────────────────────────────────
-  # Converts /cmd_vel into /wheel_velocities Float32MultiArray using rover
-  # geometry (wheel_separation_width, wheel_base, wheel_radius).
-  kinematics:
-    <<: *ros-service
-    volumes: *config-mount
-    command: >
-      ros2 run ecza_kinematics kinematics_node
-      --ros-args --params-file /config/rover_params.yaml
-    depends_on:
-      - teleop
-
   # ── micro-ros-agent ───────────────────────────────────────────────────────
   # Bridges the ESP32 micro-ROS client (UDP/DDS) into the ROS2 graph.
   # Uses upstream official image — NOT bundled in ecza-robotu:runtime.
@@ -105,12 +94,17 @@ services:
       retries: 3
 
   # ── robot_description ───────────────────────────────────────────────────────
-  # Publishes /robot_description (URDF) and broadcasts TF for the rover model.
+  # Runs robot_state_publisher + ros2_control controller_manager.
+  # controller_manager loads mecanum_drive_controller (IK + odometry) and
+  # joint_state_broadcaster via topic_based_ros2_control hardware interface.
   robot_description:
     <<: *ros-service
+    volumes: *config-mount
     command: >
       ros2 launch ecza_description hardware.launch.py
     restart: unless-stopped
+    depends_on:
+      - teleop
 
   # ── rviz ──────────────────────────────────────────────────────────────────
   # Runs RViz2 with X11 forwarding to the host desktop.
@@ -156,7 +150,7 @@ services:
     command: >
       bash -c "ros2 bag record
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
-      /joy /cmd_vel /wheel_velocities /diagnostics"
+      /joy /cmd_vel /wheel_velocities /wheel_velocities_cmd /odom /joint_states /diagnostics"
 
 # ---------------------------------------------------------------------------
 # Named volumes (none — bags use bind-mount for host accessibility)
