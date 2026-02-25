@@ -9,11 +9,21 @@ Mecanum inverse kinematics:
     FL (+x, +y)   FR (+x, -y)
     RL (-x, +y)   RR (-x, -y)
 
-  Mecanum equations (standard, rollers at ±45°):
-    ω_FL = (1/r) * (vx - vy - (lx+ly)*ωz)
-    ω_FR = (1/r) * (vx + vy + (lx+ly)*ωz)
-    ω_RL = (1/r) * (vx + vy - (lx+ly)*ωz)
-    ω_RR = (1/r) * (vx - vy + (lx+ly)*ωz)
+  Roller orientation (O-config, rollers at ±45°):
+    FL and RR: rollers at +45° (top-left to bottom-right diagonal)
+    FR and RL: rollers at -45° (top-right to bottom-left diagonal)
+
+  Verified against physical wheel spin directions (mobilerobots.pl reference):
+    Forward  (vx>0):        FL+ FR+ RL+ RR+
+    Strafe R (vy<0, ROS):   FL- FR+ RL+ RR-   (FL/RR backward, FR/RL forward)
+    Strafe L (vy>0, ROS):   FL+ FR- RL- RR+
+    CCW rot  (wz>0):        FL- FR+ RL- RR+
+
+  Corrected equations:
+    ω_FL = (1/r) * ( vx + vy - (lx+ly)*wz)
+    ω_FR = (1/r) * ( vx - vy + (lx+ly)*wz)
+    ω_RL = (1/r) * ( vx - vy - (lx+ly)*wz)
+    ω_RR = (1/r) * ( vx + vy + (lx+ly)*wz)
 
   where:
     r   = wheel_radius (m)
@@ -93,10 +103,12 @@ class MecanumKinematicsNode(Node):
         k = self._lx + self._ly  # combined half-wheelbase factor
 
         # Inverse kinematics — rad/s for each wheel
-        fl = (vx - vy - k * wz) / r
-        fr = (vx + vy + k * wz) / r
-        rl = (vx + vy - k * wz) / r
-        rr = (vx - vy + k * wz) / r
+        # Verified against physical roller orientation (O-config):
+        #   FL/RR share one diagonal, FR/RL share the other
+        fl = ( vx + vy - k * wz) / r
+        fr = ( vx - vy + k * wz) / r
+        rl = ( vx - vy - k * wz) / r
+        rr = ( vx + vy + k * wz) / r
 
         self._last_wheel_vel = [fl, fr, rl, rr]
 

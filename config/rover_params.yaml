@@ -25,22 +25,26 @@
     max_angular_speed: 3.0         # rad/s — maximum rotation speed
 
     # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
-    # Axis map (D-mode, linux joy driver):
-    #   0 = left stick horizontal  (strafe left/right)
-    #   1 = left stick vertical    (forward/backward, +1 = up = forward)
-    #   2 = right stick horizontal (not used here)
-    #   3 = right stick vertical   (not used here)
-    #   4 = d-pad horizontal
-    #   5 = d-pad vertical
-    # Button map:
-    #   4 = L1 (left bumper)   5 = R1 (right bumper, dead-man)
-    #   6 = L2                 7 = R2
-    joy_deadzone: 0.15             # [0, 1) — 0.15 suppresses RumblePad 2 right-stick drift
-    axis_linear_x: 1               # left stick vertical   (forward/backward)
-    axis_linear_y: 0               # left stick horizontal (strafe — mecanum only)
-    axis_angular_z: 3              # right stick vertical (rotation — axis 3 on RumblePad 2)
-    enable_button: 5               # R1 — dead-man switch
-    require_enable_button: false   # dead-man disabled — hold enable_button=5 (R1) to lock out only
+    # Logitech F710 Gamepad — D-mode (switch on back set to D), linux joy driver
+    # Axes (6 total):
+    #   0 = left  stick X   (left=-1, right=+1)
+    #   1 = left  stick Y   (up=+1,   down=-1)  ← forward/backward
+    #   2 = right stick X   (left=-1, right=+1)
+    #   3 = right stick Y   (up=+1,   down=-1)  ← rotation
+    #   4 = D-pad X         (left=-1, right=+1)
+    #   5 = D-pad Y         (up=+1,   down=-1)
+    # Buttons (12 total):
+    #   0=X   1=A   2=B   3=Y
+    #   4=LB  5=RB  6=LT  7=RT
+    #   8=Back  9=Start  10=L3  11=R3
+    joy_deadzone: 0.10             # [0, 1) — F710 stick deadzone
+    axis_linear_x: 1               # left  stick Y — forward / backward
+    axis_linear_y: 0               # left  stick X — strafe left / right
+    axis_angular_z: 3              # right stick Y — rotate CCW / CW
+    enable_button: 5               # RB — dead-man switch
+    require_enable_button: false   # set true to require holding RB
+    btn_strafe_left: 6             # LT — instant full-speed strafe left
+    btn_strafe_right: 7            # RT — instant full-speed strafe right
     autorepeat_rate: 10.0          # Hz — joy_node publishes even when idle
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
