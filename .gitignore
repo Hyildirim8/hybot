@@ -1,0 +1,40 @@
+# ecza-robotu .gitignore
+
+# ── rosbag2 recordings ────────────────────────────────────────────────────────
+bags/*
+!bags/.gitkeep
+
+# ── ROS2 / colcon build artifacts ────────────────────────────────────────────
+build/
+install/
+log/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Python packaging ──────────────────────────────────────────────────────────
+*.egg-info/
+dist/
+.eggs/
+
+# ── ESP-IDF firmware build ────────────────────────────────────────────────────
+firmware/build/
+firmware/sdkconfig
+firmware/dependencies.lock
+firmware/managed_components/
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# (images and containers are not versioned; the Dockerfile IS versioned)
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+.vscode/settings.json
+.idea/
+
+# ── Secrets / local overrides ────────────────────────────────────────────────
+.env.local
+*.secret

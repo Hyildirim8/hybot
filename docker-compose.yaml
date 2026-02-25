@@ -1,0 +1,165 @@
+# =============================================================================
+# docker-compose.yaml — ecza-robotu rover stack
+#
+# Usage:
+#   docker compose build              # build ecza-robotu:runtime image
+#   docker compose up                 # start full stack (no recording)
+#   COMPOSE_PROFILES=record \
+#     docker compose up               # start stack + rosbag2 recorder
+#
+# Use scripts/launch.sh for the canonical operator entry point; it handles
+# RECORD=true → COMPOSE_PROFILES=record translation and version validation.
+#
+# All services use network_mode: host so Fast-DDS UDP multicast works across
+# the container boundary without bridge-network packet filtering (research R-002).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Shared configuration fragments (YAML anchors)
+# ---------------------------------------------------------------------------
+x-ros-service: &ros-service
+  image: ecza-robotu:runtime
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    target: runtime
+  network_mode: host
+  user: rosuser
+  restart: unless-stopped
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+
+x-config-mount: &config-mount
+  - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+  - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # ── joy ───────────────────────────────────────────────────────────────────
+  # Publishes raw gamepad data as sensor_msgs/Joy on /joy.
+  # Requires privileged + /dev/input bind-mount for hot-plug kernel joystick
+  # subsystem access (joy_linux uses /dev/input/js*, not SDL event* — R-004).
+  joy:
+    <<: *ros-service
+    privileged: true                    # needed for /dev/input/* access
+    volumes:
+      - /dev/input:/dev/input           # joystick device hot-plug
+    command: >
+      ros2 run joy joy_node
+      --ros-args
+      -p device_id:=0
+      -p autorepeat_rate:=10.0
+      -p deadzone:=0.05
+    restart: unless-stopped             # auto-retry on replug / permission error
+
+  # ── teleop ────────────────────────────────────────────────────────────────
+  # Converts /joy messages into /cmd_vel Twist messages applying deadzone,
+  # dead-man switch, and speed-limit parameters from rover_params.yaml.
+  teleop:
+    <<: *ros-service
+    volumes: *config-mount
+    command: >
+      ros2 run ecza_teleop teleop_node
+      --ros-args --params-file /config/rover_params.yaml
+    depends_on:
+      - joy
+
+  # ── kinematics ────────────────────────────────────────────────────────────
+  # Converts /cmd_vel into /wheel_velocities Float32MultiArray using rover
+  # geometry (wheel_separation_width, wheel_base, wheel_radius).
+  kinematics:
+    <<: *ros-service
+    volumes: *config-mount
+    command: >
+      ros2 run ecza_kinematics kinematics_node
+      --ros-args --params-file /config/rover_params.yaml
+    depends_on:
+      - teleop
+
+  # ── micro-ros-agent ───────────────────────────────────────────────────────
+  # Bridges the ESP32 micro-ROS client (UDP/DDS) into the ROS2 graph.
+  # Uses upstream official image — NOT bundled in ecza-robotu:runtime.
+  # Port and verbosity controlled via .env (AGENT_PORT, VERBOSE).
+  micro-ros-agent:
+    image: microros/micro-ros-agent:humble
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+    command: >
+      udp4
+      --port ${AGENT_PORT:-8888}
+      --middleware dds
+      --verbose ${VERBOSE:-4}
+    healthcheck:
+      test: ["CMD", "sh", "-c", "cat /proc/net/udp | awk '{print $2}' | grep -qi $(printf '%04X' ${AGENT_PORT:-8888})"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── robot_description ───────────────────────────────────────────────────────
+  # Publishes /robot_description (URDF) and broadcasts TF for the rover model.
+  robot_description:
+    <<: *ros-service
+    command: >
+      ros2 launch ecza_description hardware.launch.py
+    restart: unless-stopped
+
+  # ── rviz ──────────────────────────────────────────────────────────────────
+  # Runs RViz2 with X11 forwarding to the host desktop.
+  # Requires: xhost +local:docker on the host before starting.
+  # Start manually: docker compose up rviz (not part of default stack)
+  rviz:
+    <<: *ros-service
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      DISPLAY: ${DISPLAY:-:0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+    command: >
+      ros2 launch ecza_description display.launch.py
+      gui:=false
+      rvizconfig:=/config/rover.rviz
+    restart: "no"
+    depends_on:
+      - robot_description
+
+  # ── diagnostics ───────────────────────────────────────────────────────────
+  # Runs diagnostic_aggregator to collect and republish /diagnostics messages.
+  diagnostics:
+    <<: *ros-service
+    volumes: *config-mount
+    command: >
+      ros2 run diagnostic_aggregator aggregator_node
+      --ros-args --params-file /config/rover_params.yaml
+
+  # ── recorder ──────────────────────────────────────────────────────────────
+  # Activated only when COMPOSE_PROFILES=record (translated by launch.sh from
+  # RECORD=true). Writes .mcap bags to ./bags/ on the host (R-008).
+  recorder:
+    <<: *ros-service
+    profiles:
+      - record
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./bags:/bags:rw
+    command: >
+      bash -c "ros2 bag record
+      -o /bags/session_$$(date +%Y%m%d_%H%M%S)
+      /joy /cmd_vel /wheel_velocities /diagnostics"
+
+# ---------------------------------------------------------------------------
+# Named volumes (none — bags use bind-mount for host accessibility)
+# Top-level volumes section intentionally empty; ./bags is auto-created by
+# Docker when the bind-mount source does not exist (T024).
+# ---------------------------------------------------------------------------

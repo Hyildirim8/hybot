@@ -1,0 +1,40 @@
+# =============================================================================
+# docker-compose.override.yaml — Development overrides
+#
+# Automatically merged by `docker compose` when present.
+# Provides development-time conveniences without touching the production
+# docker-compose.yaml:
+#
+#   • Bind-mounts ./src so colcon changes are visible without a full rebuild
+#     (useful when combined with `docker compose build` incremental caching)
+#   • Increases micro-ros-agent verbosity to level 6 (DEBUG) for development
+#   • Disables restart policies so services stop cleanly on errors during dev
+#
+# To use production settings exactly, run:
+#   docker compose -f docker-compose.yaml up
+# =============================================================================
+
+services:
+
+  # Bind-mount local source tree so the build stage picks up changes.
+  # Override target to build stage for live source inspection.
+  joy:
+    build:
+      target: runtime
+    restart: "no"
+
+  teleop:
+    restart: "no"
+
+  kinematics:
+    restart: "no"
+
+  # Raise agent verbosity to DEBUG in dev environments.
+  micro-ros-agent:
+    environment:
+      VERBOSE: "6"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-42}
+    restart: "no"
+
+  diagnostics:
+    restart: "no"

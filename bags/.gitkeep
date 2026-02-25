@@ -1,0 +1,2 @@
+# gitkeep — bags/ directory is tracked so the bind-mount target always exists.
+# The directory contents are git-ignored (see .gitignore).

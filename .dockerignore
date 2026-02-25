@@ -1,0 +1,60 @@
+# .dockerignore — excludes files from the Docker build context
+# Keeps the build context small and prevents sensitive files from leaking
+# into the image layers.
+
+# ── Version control ─────────────────────────────────────────────────────────
+.git/
+.github/
+.gitignore
+
+# ── Specification and documentation (not needed in image) ───────────────────
+specs/
+.specify/
+*.md
+docs/
+
+# ── Development tooling ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.code-workspace
+
+# ── ROS2 build artifacts (host-side colcon build) ───────────────────────────
+build/
+install/
+log/
+
+# ── Python cache ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# ── Environment and secrets ─────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Bag recordings (can be large; never belong in image) ────────────────────
+bags/
+
+# ── Docker-in-Docker (never bundle Docker files into the image) ─────────────
+docker-compose.override.yaml
+
+# ── CI and coverage artifacts ───────────────────────────────────────────────
+coverage/
+.coverage
+htmlcov/
+*.log
+
+# ── OS artifacts ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+*.swo
+
+# ── Firmware build artefacts (separate build system) ────────────────────────
+firmware/build/
+firmware/sdkconfig
+firmware/dependencies.lock

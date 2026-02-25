@@ -1,0 +1,191 @@
+<?xml version="1.0"?>
+<!--
+  rover.urdf.xacro — URDF model for the ecza-robotu 4-wheel mecanum rover.
+
+  Mecanum roller convention (top-down, X forward):
+    FL  +45°  /    FR  -45°  \
+    RL  -45°  \    RR  +45°  /
+
+  Geometry pulled from config/rover_params.yaml:
+    wheel_separation_width : 0.26 m   (left/right centre-to-centre)
+    wheel_base             : 0.38 m   (front/rear axle centre-to-centre)
+    wheel_radius           : 0.05 m   (placeholder — update when measured)
+
+  Frame convention (ROS REP-103):
+    base_link  — geometric centre of chassis, mid-height
+    base_footprint — projection of base_link onto ground plane
+
+  Wheel naming: fl fr rl rr
+-->
+<robot name="ecza_rover" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ── Parameters ─────────────────────────────────────────────────────── -->
+  <xacro:property name="chassis_length"    value="0.38"/>  <!-- wheel_base -->
+  <xacro:property name="chassis_width"     value="0.26"/>  <!-- wheel_separation_width -->
+  <xacro:property name="chassis_height"    value="0.08"/>
+  <xacro:property name="chassis_mass"      value="3.0"/>   <!-- kg, estimate -->
+
+  <xacro:property name="wheel_radius"      value="0.05"/>
+  <xacro:property name="wheel_width"       value="0.03"/>
+  <xacro:property name="wheel_mass"        value="0.15"/>
+
+  <!-- Half-extents for convenience -->
+  <xacro:property name="cl2" value="${chassis_length/2}"/>
+  <xacro:property name="cw2" value="${chassis_width/2}"/>
+  <xacro:property name="ch2" value="${chassis_height/2}"/>
+
+  <!-- Chassis sits so its bottom is at wheel_radius height above footprint -->
+  <xacro:property name="chassis_z" value="${wheel_radius + ch2}"/>
+
+  <!-- ── Material colours ───────────────────────────────────────────────── -->
+  <material name="chassis_grey">
+    <color rgba="0.3 0.3 0.3 1.0"/>
+  </material>
+  <material name="wheel_black">
+    <color rgba="0.1 0.1 0.1 1.0"/>
+  </material>
+  <material name="axle_silver">
+    <color rgba="0.7 0.7 0.7 1.0"/>
+  </material>
+
+  <!-- ── Inertia macros ─────────────────────────────────────────────────── -->
+  <xacro:macro name="box_inertia" params="m x y z">
+    <inertial>
+      <mass value="${m}"/>
+      <inertia
+        ixx="${m*(y*y+z*z)/12}" ixy="0" ixz="0"
+        iyy="${m*(x*x+z*z)/12}" iyz="0"
+        izz="${m*(x*x+y*y)/12}"/>
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="cylinder_inertia" params="m r h">
+    <inertial>
+      <mass value="${m}"/>
+      <inertia
+        ixx="${m*(3*r*r+h*h)/12}" ixy="0" ixz="0"
+        iyy="${m*(3*r*r+h*h)/12}" iyz="0"
+        izz="${m*r*r/2}"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- ── base_footprint ─────────────────────────────────────────────────── -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child  link="base_link"/>
+    <origin xyz="0 0 ${wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ── base_link (chassis) ────────────────────────────────────────────── -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 ${ch2}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+      </geometry>
+      <material name="chassis_grey"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 ${ch2}" rpy="0 0 0"/>
+      <geometry>
+        <box size="${chassis_length} ${chassis_width} ${chassis_height}"/>
+      </geometry>
+    </collision>
+    <xacro:box_inertia m="${chassis_mass}" x="${chassis_length}" y="${chassis_width}" z="${chassis_height}"/>
+  </link>
+
+  <!-- ESP32 / electronics box on top of chassis -->
+  <link name="electronics_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <box size="0.08 0.06 0.03"/>
+      </geometry>
+      <material name="axle_silver"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0"/>
+      <geometry><box size="0.08 0.06 0.03"/></geometry>
+    </collision>
+    <xacro:box_inertia m="0.05" x="0.08" y="0.06" z="0.03"/>
+  </link>
+
+  <joint name="electronics_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="electronics_link"/>
+    <origin xyz="0 0 ${chassis_height + 0.015}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- ── Mecanum wheel macro ───────────────────────────────────────────── -->
+  <!--
+    name:    fl | fr | rl | rr
+    x_pos:   ±wheel_base/2
+    y_pos:   ±(chassis_width/2 + wheel_width/2)
+    roller_angle: +pi/4 for FL/RR wheels (/ rollers), -pi/4 for FR/RL (\)
+      The roller_angle rotates the visual stripes around the wheel Z axis to
+      indicate the 45° passive roller direction — purely cosmetic in URDF.
+  -->
+  <xacro:macro name="mecanum_wheel" params="name x_pos y_pos roller_angle">
+    <link name="${name}_wheel_link">
+      <!-- Main wheel drum -->
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+        <material name="wheel_black"/>
+      </visual>
+      <!-- Roller 1 — large diagonal indicator at roller_angle -->
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 ${roller_angle}"/>
+        <geometry>
+          <box size="${wheel_radius*2.05} ${wheel_width*0.9} ${wheel_radius*0.35}"/>
+        </geometry>
+        <material name="axle_silver"/>
+      </visual>
+      <!-- Roller 2 — opposite side -->
+      <visual>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 ${roller_angle + pi/2}"/>
+        <geometry>
+          <box size="${wheel_radius*2.05} ${wheel_width*0.9} ${wheel_radius*0.35}"/>
+        </geometry>
+        <material name="axle_silver"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 0" rpy="${pi/2} 0 0"/>
+        <geometry>
+          <cylinder radius="${wheel_radius}" length="${wheel_width}"/>
+        </geometry>
+      </collision>
+      <xacro:cylinder_inertia m="${wheel_mass}" r="${wheel_radius}" h="${wheel_width}"/>
+    </link>
+
+    <joint name="${name}_wheel_joint" type="continuous">
+      <parent link="base_link"/>
+      <child  link="${name}_wheel_link"/>
+      <origin xyz="${x_pos} ${y_pos} 0" rpy="0 0 0"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.01" friction="0.1"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Instantiate 4 mecanum wheels
+       FL/RR: roller_angle = +pi/4  (/ rollers — standard mecanum)
+       FR/RL: roller_angle = -pi/4  (\ rollers)
+  -->
+  <xacro:mecanum_wheel name="fl" x_pos=" ${cl2}" y_pos=" ${cw2 + wheel_width/2}" roller_angle=" ${pi/4}"/>
+  <xacro:mecanum_wheel name="fr" x_pos=" ${cl2}" y_pos="-${cw2 + wheel_width/2}" roller_angle="-${pi/4}"/>
+  <xacro:mecanum_wheel name="rl" x_pos="-${cl2}" y_pos=" ${cw2 + wheel_width/2}" roller_angle="-${pi/4}"/>
+  <xacro:mecanum_wheel name="rr" x_pos="-${cl2}" y_pos="-${cw2 + wheel_width/2}" roller_angle=" ${pi/4}"/>
+
+  <!-- ── IMU frame (centred on chassis top) ─────────────────────────────── -->
+  <link name="imu_link"/>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="imu_link"/>
+    <origin xyz="0 0 ${chassis_height}" rpy="0 0 0"/>
+  </joint>
+
+</robot>

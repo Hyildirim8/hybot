@@ -1,0 +1,47 @@
+menu "Rover Motor GPIO Configuration"
+
+    config MOTOR_FL_RPWM_GPIO
+        int "Front-Left  RPWM GPIO"
+        default 4
+        range 0 48
+        help
+            RPWM (reverse PWM) output for the front-left BTS7960B driver.
+
+    config MOTOR_FL_LPWM_GPIO
+        int "Front-Left  LPWM GPIO"
+        default 5
+        range 0 48
+        help
+            LPWM (forward PWM) output for the front-left BTS7960B driver.
+
+    config MOTOR_FR_RPWM_GPIO
+        int "Front-Right RPWM GPIO"
+        default 6
+        range 0 48
+
+    config MOTOR_FR_LPWM_GPIO
+        int "Front-Right LPWM GPIO"
+        default 7
+        range 0 48
+
+    config MOTOR_RL_RPWM_GPIO
+        int "Rear-Left   RPWM GPIO"
+        default 15
+        range 0 48
+
+    config MOTOR_RL_LPWM_GPIO
+        int "Rear-Left   LPWM GPIO"
+        default 16
+        range 0 48
+
+    config MOTOR_RR_RPWM_GPIO
+        int "Rear-Right  RPWM GPIO"
+        default 17
+        range 0 48
+
+    config MOTOR_RR_LPWM_GPIO
+        int "Rear-Right  LPWM GPIO"
+        default 18
+        range 0 48
+
+endmenu

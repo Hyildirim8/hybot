@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  fastdds_agent.xml
+  For micro-ros-agent: UDPv4 on 127.0.0.1 WITH builtin transports enabled.
+  useBuiltinTransports: true makes the agent join DDS PDP on port 17900
+  so it discovers all ROS2 nodes on the same host.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_transport</transport_id>
+      <type>UDPv4</type>
+      <interfaceWhiteList>
+        <address>127.0.0.1</address>
+      </interfaceWhiteList>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="participant_profile" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_transport</transport_id>
+      </userTransports>
+      <useBuiltinTransports>true</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

@@ -1,0 +1,56 @@
+# rover_params.yaml — Single runtime configuration for the ecza-robotu stack.
+#
+# Mounted read-only into all service containers at /config/rover_params.yaml.
+# Edit this file and restart the stack (no image rebuild needed).
+#
+# IMPORTANT: All keys use ros__parameters (double underscore).
+# Missing required keys cause the affected node to log ERROR and exit.
+#
+# Canonical source of truth: specs/006-docker-runtime/contracts/compose-schema.md §2
+
+/**:
+  ros__parameters:
+
+    # ── Rover geometry ────────────────────────────────────────────────────────
+    # All values must be positive non-zero floats.
+    # wheel_radius: PLACEHOLDER — measure the physical wheel and update before
+    #               any hardware motion tests. Using 0.05 m will produce
+    #               incorrect wheel velocities.
+    wheel_separation_width: 0.26   # metres — left/right wheel centre distance
+    wheel_base: 0.38               # metres — front/rear axle centre distance
+    wheel_radius: 0.05             # metres — PLACEHOLDER; measure and update
+
+    # ── Speed limits ──────────────────────────────────────────────────────────
+    max_linear_speed: 1.5          # m/s — maximum translational speed
+    max_angular_speed: 3.0         # rad/s — maximum rotation speed
+
+    # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
+    # Axis map (D-mode, linux joy driver):
+    #   0 = left stick horizontal  (strafe left/right)
+    #   1 = left stick vertical    (forward/backward, +1 = up = forward)
+    #   2 = right stick horizontal (not used here)
+    #   3 = right stick vertical   (not used here)
+    #   4 = d-pad horizontal
+    #   5 = d-pad vertical
+    # Button map:
+    #   4 = L1 (left bumper)   5 = R1 (right bumper, dead-man)
+    #   6 = L2                 7 = R2
+    joy_deadzone: 0.15             # [0, 1) — 0.15 suppresses RumblePad 2 right-stick drift
+    axis_linear_x: 1               # left stick vertical   (forward/backward)
+    axis_linear_y: 0               # left stick horizontal (strafe — mecanum only)
+    axis_angular_z: 3              # right stick vertical (rotation — axis 3 on RumblePad 2)
+    enable_button: 5               # R1 — dead-man switch
+    require_enable_button: false   # dead-man disabled — hold enable_button=5 (R1) to lock out only
+    autorepeat_rate: 10.0          # Hz — joy_node publishes even when idle
+
+    # ── Watchdog timeouts ─────────────────────────────────────────────────────
+    # Two distinct watchdogs — do not conflate them.
+    joy_watchdog_timeout_ms: 500        # ms — teleop node zero-Twist on /joy silence
+    firmware_watchdog_timeout_ms: 500   # ms — ESP32 stops motors on /wheel_velocities silence
+                                        # (informational here; firmware reads from NVS)
+
+    # ── micro-ROS agent (informational) ──────────────────────────────────────
+    # The actual agent port is set via the AGENT_PORT env var in .env.
+    # Keep this in sync with AGENT_PORT.
+    agent_port: 8888               # UDP port for micro-ROS agent
+    agent_bind_address: "0.0.0.0"  # bind to all interfaces

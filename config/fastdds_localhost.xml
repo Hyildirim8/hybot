@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fastdds_localhost.xml
+  Enables Shared Memory (SHM) transport for all intra-host ROS nodes.
+  SHM is zero-copy and does not depend on multicast or loopback routing.
+  All containers use network_mode:host so they share the same OS SHM segments.
+  Also keeps the default UDPv4 transport as fallback for CLI tools.
+-->
+<dds xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <profiles>
+    <transport_descriptors>
+      <transport_descriptor>
+        <transport_id>shm_transport</transport_id>
+        <type>SHM</type>
+      </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="default_participant" is_default_profile="true">
+      <rtps>
+        <userTransports>
+          <transport_id>shm_transport</transport_id>
+        </userTransports>
+        <useBuiltinTransports>true</useBuiltinTransports>
+      </rtps>
+    </participant>
+  </profiles>
+</dds>
