@@ -205,10 +205,32 @@ services:
   #   NAV_MODE=slam (default) — online SLAM, builds map while navigating
   #   NAV_MODE=nav  MAP=/maps/my_map.yaml — Nav2 with AMCL on a saved map
   # Profile: nav — activate with COMPOSE_PROFILES=nav
+  #
+  # ⚠️  CORRECT RESTART PROCEDURE — always use --force-recreate:
+  #   SLAM (default):
+  #     docker compose --profile nav up -d --force-recreate navigation lidar
+  #   Nav mode (saved map):
+  #     NAV_MODE=nav MAP=/maps/my_map.yaml \
+  #       docker compose --profile nav up -d --force-recreate navigation
+  #
+  #   ❌ Do NOT use `docker restart ecza-robotu-navigation-1`
+  #      It reuses the old container; new config/env changes are ignored.
+  #
+  # Fast config iteration (no rebuild needed — config is bind-mounted):
+  #   Edit src/ecza_navigation/config/nav2_params.yaml or any launch.py,
+  #   then just force-recreate the container (docker-compose.override.yaml
+  #   mounts src/ecza_navigation/ directly into the container).
   navigation:
     <<: *ros-service
     profiles:
       - nav
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      # Override on the command line to switch modes:
+      #   NAV_MODE=nav MAP=/maps/my_map.yaml docker compose --profile nav up -d --force-recreate navigation
+      NAV_MODE: ${NAV_MODE:-slam}
+      MAP: ${MAP:-}
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./maps:/maps:rw
@@ -217,6 +239,12 @@ services:
       - -c
       - |
         MODE=${NAV_MODE:-slam}
+        # Wait for the rest of the stack (hardware, lidar) to register their
+        # ROS2 services before launching Nav2. The lifecycle_manager's internal
+        # get_state service client has a hardcoded 2s timeout; if nodes are
+        # still initialising when it fires, bringup fails. A 10s sleep ensures
+        # all servers are ready on slow hardware (Raspberry Pi).
+        sleep 10
         if [ "$$MODE" = "nav" ] && [ -n "$${MAP:-}" ]; then
           exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=nav map:=$$MAP
         else

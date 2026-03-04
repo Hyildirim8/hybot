@@ -131,10 +131,10 @@ fi
 # Export map path for navigation container
 if [[ -n "$MAP_FILE" ]]; then
     export MAP="$MAP_FILE"
-    export NAV_MODE_ENV="nav"
+    export NAV_MODE="nav"
     echo "Nav mode: nav (map: $MAP_FILE)"
 else
-    export NAV_MODE_ENV="${NAV_MODE_ENV:-slam}"
+    export NAV_MODE="${NAV_MODE_OVERRIDE:-slam}"
 fi
 
 if [[ "$DEV_MODE" == "true" ]]; then
@@ -148,4 +148,12 @@ fi
 # Launch the stack
 # ─────────────────────────────────────────────────────────────────────────────
 echo "Starting ecza-robotu rover stack..."
-exec docker compose $COMPOSE_FILES up "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+# Nav profile always uses --force-recreate so that:
+#   • Updated config files (bind-mounted) are picked up immediately
+#   • NAV_MODE / MAP env var changes take effect
+#   • The 10s startup delay in the container command resets cleanly
+if [[ "$NAV_MODE" != "false" ]] && [[ -n "$COMPOSE_PROFILES" ]]; then
+    exec docker compose $COMPOSE_FILES up --force-recreate "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+else
+    exec docker compose $COMPOSE_FILES up "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+fi

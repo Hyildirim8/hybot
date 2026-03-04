@@ -37,7 +37,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (EqualsSubstitution, LaunchConfiguration,
                                    PathJoinSubstitution)
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -99,6 +99,7 @@ def generate_launch_description() -> LaunchDescription:
             "use_sim_time":  use_sim_time,
             "params_file":   params_file,
             "use_composition": "False",
+            "use_respawn":   "True",
         }.items(),
     )
 
@@ -113,6 +114,7 @@ def generate_launch_description() -> LaunchDescription:
             "params_file":   params_file,
             "map":           map_yaml,
             "use_composition": "False",
+            "use_respawn":   "True",
         }.items(),
     )
 
@@ -128,6 +130,12 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     return LaunchDescription([
+        # Increase lifecycle_manager bond_timeout for slow hardware (Raspberry Pi).
+        # Default 4.0 s is too tight; Nav2 servers take ~6-8 s to bond on boot.
+        # attempt_respawn_reconnection: reconnect if a managed node briefly
+        # disappears during state transition (race condition on slow hardware).
+        SetParameter(name="bond_timeout", value=10.0),
+        SetParameter(name="attempt_respawn_reconnection", value=True),
         mode_arg,
         map_arg,
         use_sim_time_arg,

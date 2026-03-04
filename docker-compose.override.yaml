@@ -1,0 +1,37 @@
+# =============================================================================
+# docker-compose.override.yaml — Development overrides for ecza-robotu
+#
+# PURPOSE: Bind-mount hot-editable source files into the runtime image so
+# that config / launch changes take effect with only `--force-recreate`
+# (no `docker compose build` required).
+#
+# HOW IT WORKS:
+#   Docker Compose automatically merges this file with docker-compose.yaml.
+#   Only the `volumes` key is extended here — no service logic is changed.
+#
+# FILES MOUNTED (host → container):
+#   src/ecza_navigation/config/   → /ws/install/share/ecza_navigation/config/
+#   src/ecza_navigation/launch/   → /ws/install/share/ecza_navigation/launch/
+#   src/ecza_description/rviz/    → /ws/install/share/ecza_description/rviz/
+#
+# WHEN YOU STILL NEED `docker compose build`:
+#   • Adding/removing a ROS package (new package.xml)
+#   • Changing Python source code in ecza_teleop, ecza_kinematics, etc.
+#   • Adding a new apt package to docker/Dockerfile
+#
+# FAST WORKFLOW (config/launch changes only):
+#   1. Edit src/ecza_navigation/config/nav2_params.yaml  (or any launch.py)
+#   2. docker compose -f docker-compose.yaml --profile nav up -d --force-recreate navigation
+#   3. docker logs -f ecza-robotu-navigation-1
+# =============================================================================
+
+services:
+
+  navigation:
+    volumes:
+      - ./src/ecza_navigation/config:/ws/install/share/ecza_navigation/config:ro
+      - ./src/ecza_navigation/launch:/ws/install/share/ecza_navigation/launch:ro
+
+  rviz:
+    volumes:
+      - ./src/ecza_description/rviz:/ws/install/share/ecza_description/rviz:ro
