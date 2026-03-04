@@ -22,7 +22,7 @@ Panels:
     Expanded:
       - /Current View1
     Name: Views
-  - Class: nav2_rviz_plugins/Nav2Panel
+  - Class: nav2_rviz_plugins/Navigation 2
     Name: Navigation 2
   - Class: rviz_common/Time
     Experimental: false
