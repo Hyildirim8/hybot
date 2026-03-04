@@ -177,7 +177,55 @@ services:
     command: >
       bash -c "ros2 bag record
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
-      /joy /cmd_vel /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics"
+      /joy /cmd_vel /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
+
+  # ── lidar ─────────────────────────────────────────────────────────────────
+  # RPLidar A2M12 driver. Publishes /scan (sensor_msgs/LaserScan).
+  # Device: /dev/ttyLIDAR (udev symlink — see /etc/udev/rules.d/99-esp32.rules)
+  # Profile: lidar — activate with: COMPOSE_PROFILES=lidar docker compose up
+  #          or: bash scripts/launch.sh --lidar
+  lidar:
+    <<: *ros-service
+    profiles:
+      - lidar
+      - nav
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+    command: >
+      ros2 launch ecza_lidar lidar.launch.py
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── navigation ────────────────────────────────────────────────────────────
+  # Nav2 + SLAM Toolbox autonomous navigation.
+  # Modes:
+  #   NAV_MODE=slam (default) — online SLAM, builds map while navigating
+  #   NAV_MODE=nav  MAP=/maps/my_map.yaml — Nav2 with AMCL on a saved map
+  # Profile: nav — activate with COMPOSE_PROFILES=nav
+  navigation:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./maps:/maps:rw
+    command:
+      - bash
+      - -c
+      - |
+        MODE=${NAV_MODE:-slam}
+        if [ "$$MODE" = "nav" ] && [ -n "$${MAP:-}" ]; then
+          exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=nav map:=$$MAP
+        else
+          exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=slam
+        fi
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+      - lidar
 
 # ---------------------------------------------------------------------------
 # Named volumes (none — bags use bind-mount for host accessibility)

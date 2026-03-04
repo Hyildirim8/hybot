@@ -44,6 +44,7 @@
     require_enable_button: false   # set true to require holding RB
     btn_strafe_left: 6             # LT — instant full-speed strafe left
     btn_strafe_right: 7            # RT — instant full-speed strafe right
+    btn_auto_mode: 9               # Start — toggle autonomous / teleop mode
     autorepeat_rate: 10.0          # Hz — joy_node publishes even when idle
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────

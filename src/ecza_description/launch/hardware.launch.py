@@ -74,6 +74,9 @@ def generate_launch_description() -> LaunchDescription:
             # Remap mecanum_drive_controller's namespaced TF odometry publisher
             # so odom→base_link reaches the global /tf topic that RViz reads.
             ("/controller_manager/tf_odometry", "/tf"),
+            # Remap odometry topic so Nav2, SLAM Toolbox and other nodes
+            # that subscribe to the standard /odom topic receive it.
+            ("/controller_manager/odometry", "/odom"),
         ],
     )
 

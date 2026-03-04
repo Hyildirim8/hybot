@@ -64,6 +64,9 @@ COPY --from=build /ws/install /ws/install
 # Install apt-sourced ROS2 packages that are not part of the workspace src/.
 # joy:                  joy_linux node for gamepad input (joy service)
 # diagnostic-aggregator: aggregates /diagnostics (diagnostics service)
+# rplidar-ros:          RPLidar A2M12 driver (lidar service)
+# nav2:                 autonomous navigation stack (navigation service)
+# slam-toolbox:         online SLAM for map building
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
         ros-humble-joy \
@@ -77,7 +80,12 @@ RUN apt-get update -qq && \
         ros-humble-ros2-controllers \
         ros-humble-mecanum-drive-controller \
         ros-humble-topic-based-ros2-control \
-        ros-humble-controller-manager && \
+        ros-humble-controller-manager \
+        ros-humble-rplidar-ros \
+        ros-humble-navigation2 \
+        ros-humble-nav2-bringup \
+        ros-humble-nav2-rviz-plugins \
+        ros-humble-slam-toolbox && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root operator user UID 1000.

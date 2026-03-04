@@ -4,19 +4,17 @@
 # Usage:
 #   bash scripts/launch.sh [docker compose up options]
 #   bash scripts/launch.sh --dev [options]        # dev mode: source mount + agent debug
-#   RECORD=true bash scripts/launch.sh            # also start recorder service
-#   RECORD=true bash scripts/launch.sh -d         # detached mode with recording
+#   bash scripts/launch.sh --lidar                # base stack + RPLidar driver
+#   bash scripts/launch.sh --nav                  # base stack + lidar + Nav2/SLAM
+#   bash scripts/launch.sh --nav --map /maps/x.yaml  # nav mode with saved map
+#   RECORD=true bash scripts/launch.sh            # also start rosbag2 recorder
 #
 # What this script does:
 #   1. Validates Docker Engine >= 24.0 and Docker Compose plugin >= 2.20
-#   2. Translates RECORD=true into COMPOSE_PROFILES=record before invoking
-#      docker compose, so operators can use the simpler RECORD=true syntax
-#      documented in the quickstart rather than setting COMPOSE_PROFILES directly.
-#   3. By default uses ONLY docker-compose.yaml (production: restart:unless-stopped,
-#      no source mounts, image-baked binaries).
-#      With --dev, also merges docker-compose.dev.yaml (source mounts, debug verbosity,
-#      restart:no so containers stop cleanly on errors).
-#   4. Passes all remaining arguments through to `docker compose up`.
+#   2. Translates RECORD=true → COMPOSE_PROFILES includes 'record'
+#   3. --lidar adds 'lidar' profile; --nav adds 'nav' profile (includes lidar)
+#   4. --dev merges docker-compose.dev.yaml
+#   5. By default uses ONLY docker-compose.yaml (restart:unless-stopped)
 #
 # See specs/006-docker-runtime/quickstart.md for the full operator guide.
 set -euo pipefail
@@ -89,33 +87,61 @@ echo "Docker and Compose versions OK."
 RECORD="${RECORD:-false}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# --dev flag: merge docker-compose.dev.yaml for development overrides
-# (source mounts, agent debug verbosity, restart:no)
+# Parse flags: --dev, --lidar, --nav, --map <path>
 # ─────────────────────────────────────────────────────────────────────────────
 DEV_MODE=false
+LIDAR_MODE=false
+NAV_MODE=false
+MAP_FILE=""
 REMAINING_ARGS=()
-for arg in "$@"; do
-    if [[ "$arg" == "--dev" ]]; then
-        DEV_MODE=true
-    else
-        REMAINING_ARGS+=("$arg")
-    fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --dev)   DEV_MODE=true;  shift ;;
+        --lidar) LIDAR_MODE=true; shift ;;
+        --nav)   NAV_MODE=true;  shift ;;
+        --map)   MAP_FILE="$2";  shift 2 ;;
+        *)       REMAINING_ARGS+=("$1"); shift ;;
+    esac
 done
+
+# --nav implies --lidar (nav profile includes the lidar service)
+if [[ "$NAV_MODE" == "true" ]]; then
+    LIDAR_MODE=true
+fi
+
+# Build COMPOSE_PROFILES
+PROFILES=""
+if [[ "$RECORD" == "true" ]]; then
+    PROFILES="record"
+fi
+if [[ "$NAV_MODE" == "true" ]]; then
+    PROFILES="${PROFILES:+$PROFILES,}nav"
+elif [[ "$LIDAR_MODE" == "true" ]]; then
+    PROFILES="${PROFILES:+$PROFILES,}lidar"
+fi
+
+if [[ -n "$PROFILES" ]]; then
+    export COMPOSE_PROFILES="$PROFILES"
+    echo "Profiles: COMPOSE_PROFILES=$COMPOSE_PROFILES"
+else
+    unset COMPOSE_PROFILES
+fi
+
+# Export map path for navigation container
+if [[ -n "$MAP_FILE" ]]; then
+    export MAP="$MAP_FILE"
+    export NAV_MODE_ENV="nav"
+    echo "Nav mode: nav (map: $MAP_FILE)"
+else
+    export NAV_MODE_ENV="${NAV_MODE_ENV:-slam}"
+fi
 
 if [[ "$DEV_MODE" == "true" ]]; then
     COMPOSE_FILES="-f docker-compose.yaml -f docker-compose.dev.yaml"
     echo "DEV mode: merging docker-compose.dev.yaml (source mounts, debug agent, restart:no)"
 else
     COMPOSE_FILES="-f docker-compose.yaml"
-fi
-
-if [[ "$RECORD" == "true" ]]; then
-    export COMPOSE_PROFILES=record
-    echo "Recording enabled: COMPOSE_PROFILES=record (recorder service will start)"
-else
-    # Ensure COMPOSE_PROFILES is not set to something unexpected from a prior
-    # shell session that could accidentally activate the recorder.
-    unset COMPOSE_PROFILES
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
