@@ -56,7 +56,7 @@ int status_serialize(const FirmwareStatus *s, char *buf, size_t len);
  * @param node      Initialised rcl_node_t.
  * @param executor  Executor (rcl_timer handle added here; capacity must be ≥3).
  */
-void status_reporter_init(rcl_node_t *node, rclc_executor_t *executor);
+void status_reporter_init(rcl_node_t *node, rclc_support_t *support, rclc_executor_t *executor);
 
 /**
  * status_reporter_fini() — Destroy publisher resources.

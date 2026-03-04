@@ -67,6 +67,7 @@ COPY --from=build /ws/install /ws/install
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
         ros-humble-joy \
+        ros-humble-joy-linux \
         ros-humble-diagnostic-aggregator \
         ros-humble-xacro \
         ros-humble-robot-state-publisher \

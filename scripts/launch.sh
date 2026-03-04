@@ -3,15 +3,20 @@
 #
 # Usage:
 #   bash scripts/launch.sh [docker compose up options]
-#   RECORD=true bash scripts/launch.sh           # also start recorder service
-#   RECORD=true bash scripts/launch.sh -d        # detached mode with recording
+#   bash scripts/launch.sh --dev [options]        # dev mode: source mount + agent debug
+#   RECORD=true bash scripts/launch.sh            # also start recorder service
+#   RECORD=true bash scripts/launch.sh -d         # detached mode with recording
 #
 # What this script does:
 #   1. Validates Docker Engine >= 24.0 and Docker Compose plugin >= 2.20
 #   2. Translates RECORD=true into COMPOSE_PROFILES=record before invoking
 #      docker compose, so operators can use the simpler RECORD=true syntax
 #      documented in the quickstart rather than setting COMPOSE_PROFILES directly.
-#   3. Passes all remaining arguments through to `docker compose up`.
+#   3. By default uses ONLY docker-compose.yaml (production: restart:unless-stopped,
+#      no source mounts, image-baked binaries).
+#      With --dev, also merges docker-compose.dev.yaml (source mounts, debug verbosity,
+#      restart:no so containers stop cleanly on errors).
+#   4. Passes all remaining arguments through to `docker compose up`.
 #
 # See specs/006-docker-runtime/quickstart.md for the full operator guide.
 set -euo pipefail
@@ -83,6 +88,27 @@ echo "Docker and Compose versions OK."
 # ─────────────────────────────────────────────────────────────────────────────
 RECORD="${RECORD:-false}"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# --dev flag: merge docker-compose.dev.yaml for development overrides
+# (source mounts, agent debug verbosity, restart:no)
+# ─────────────────────────────────────────────────────────────────────────────
+DEV_MODE=false
+REMAINING_ARGS=()
+for arg in "$@"; do
+    if [[ "$arg" == "--dev" ]]; then
+        DEV_MODE=true
+    else
+        REMAINING_ARGS+=("$arg")
+    fi
+done
+
+if [[ "$DEV_MODE" == "true" ]]; then
+    COMPOSE_FILES="-f docker-compose.yaml -f docker-compose.dev.yaml"
+    echo "DEV mode: merging docker-compose.dev.yaml (source mounts, debug agent, restart:no)"
+else
+    COMPOSE_FILES="-f docker-compose.yaml"
+fi
+
 if [[ "$RECORD" == "true" ]]; then
     export COMPOSE_PROFILES=record
     echo "Recording enabled: COMPOSE_PROFILES=record (recorder service will start)"
@@ -96,4 +122,4 @@ fi
 # Launch the stack
 # ─────────────────────────────────────────────────────────────────────────────
 echo "Starting ecza-robotu rover stack..."
-exec docker compose up "$@"
+exec docker compose $COMPOSE_FILES up "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"

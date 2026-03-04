@@ -18,19 +18,39 @@ CONFIG_ESP_TASK_WDT_TIMEOUT_S=2
 CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=n
 
 # ─────────────────────────────────────────────────────────────────────────────
-# WiFi — station mode, power save off for low-latency micro-ROS
+# micro-ROS transport — USB CDC-ACM (TinyUSB) custom transport
+# MICRO_ROS_ESP_UART_TRANSPORT enables RMW_UXRCE_TRANSPORT_CUSTOM in libmicroros.
+# The actual transport functions are overridden at runtime via
+# rmw_uros_set_custom_transport() with esp32s2_usbcdc_* callbacks.
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=10
-CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=32
-CONFIG_ESP_WIFI_TX_BUFFER_TYPE_DYNAMIC=y
+CONFIG_MICRO_ROS_ESP_UART_TRANSPORT=y
+CONFIG_MICROROS_UART_TXD=-1
+CONFIG_MICROROS_UART_RXD=-1
+CONFIG_MICROROS_UART_RTS=-1
+CONFIG_MICROROS_UART_CTS=-1
 
 # ─────────────────────────────────────────────────────────────────────────────
-# LwIP — UDP receive buffer required for micro-ROS DDS transport
+# USB — TinyUSB OTG for micro-ROS CDC-ACM transport
+#
+# ESP32-S3 has two USB peripherals sharing the same D+/D- pins (GPIO19/20):
+#   1. USB Serial/JTAG — built-in debug interface (JTAG + ESP_LOG console)
+#   2. USB OTG (TinyUSB) — application-level CDC-ACM used by micro-ROS
+#
+# These two peripherals are MUTUALLY EXCLUSIVE on the same USB pins.
+# When TINYUSB_RHPORT_FS=y takes the USB OTG peripheral, the USB-Serial/JTAG
+# interface is disabled.  ESP_LOG output will appear only on UART0 (primary
+# console, physical TX/RX pins) — connect a USB-to-serial adapter if needed.
+#
+# The TinyUSB CDC-ACM device appears as a NEW /dev/ttyACM* node on the host
+# (distinct from the now-absent USB-Serial/JTAG ttyACM).
 # ─────────────────────────────────────────────────────────────────────────────
-CONFIG_LWIP_SO_RCVBUF=y
+# Disable USB-Serial/JTAG secondary console so TinyUSB OTG can own the pins.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+# CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG is not set
+CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=n
 
 # ─────────────────────────────────────────────────────────────────────────────
-# NVS — non-volatile storage for WiFi credentials and rover config
+# NVS — non-volatile storage for rover config
 # ─────────────────────────────────────────────────────────────────────────────
 CONFIG_NVS_ASSERT_ERROR_CHECK=n
 

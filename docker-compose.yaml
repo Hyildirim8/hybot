@@ -49,11 +49,12 @@ services:
     privileged: true                    # needed for /dev/input/* access
     volumes:
       - /dev/input:/dev/input           # joystick device hot-plug
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
     command: >
-      ros2 run joy joy_node
+      ros2 run joy_linux joy_linux_node
       --ros-args
-      -p device_id:=0
-      -p autorepeat_rate:=10.0
+      -p dev:=/dev/input/js0
+      -p autorepeat_rate:=50.0
       -p deadzone:=0.05
     restart: unless-stopped             # auto-retry on replug / permission error
 
@@ -63,32 +64,52 @@ services:
   teleop:
     <<: *ros-service
     volumes: *config-mount
-    command: >
-      ros2 run ecza_teleop teleop_node
-      --ros-args --params-file /config/rover_params.yaml
+    command:
+      - ros2
+      - run
+      - ecza_teleop
+      - teleop_node
+      - --ros-args
+      - --params-file
+      - /config/rover_params.yaml
+      - -r
+      - cmd_vel:=/controller_manager/reference_unstamped
     depends_on:
       - joy
 
   # ── micro-ros-agent ───────────────────────────────────────────────────────
-  # Bridges the ESP32 micro-ROS client (UDP/DDS) into the ROS2 graph.
+  # Bridges the ESP32 micro-ROS client (USB serial / CDC-ACM) into the ROS2 graph.
+  # The ESP32-S3 native USB port appears as /dev/ttyACM0 on the host.
   # Uses upstream official image — NOT bundled in ecza-robotu:runtime.
-  # Port and verbosity controlled via .env (AGENT_PORT, VERBOSE).
+  # Device path controlled via SERIAL_DEV env var (default /dev/ttyACM0).
+  # Baud rate is ignored for CDC-ACM but set for compatibility.
   micro-ros-agent:
     image: microros/micro-ros-agent:humble
     network_mode: host
+    privileged: true
     restart: unless-stopped
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
-    command: >
-      udp4
-      --port ${AGENT_PORT:-8888}
-      --middleware dds
-      --verbose ${VERBOSE:-4}
+      - /dev:/dev
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        # Wait for the ESP32 CDC device to appear
+        until [ -e /dev/ttyESP32 ]; do
+          echo "Waiting for /dev/ttyESP32..."
+          sleep 1
+        done
+        # Open in blocking mode to assert CDC DTR; fd 3 stays open throughout
+        exec 3<>/dev/ttyESP32
+        stty -F /dev/ttyESP32 115200 raw -hupcl 2>/dev/null || true
+        exec /micro-ros_entrypoint.sh \
+          serial --dev /dev/ttyESP32 --baudrate 115200 --verbose 4
     healthcheck:
-      test: ["CMD", "sh", "-c", "cat /proc/net/udp | awk '{print $2}' | grep -qi $(printf '%04X' ${AGENT_PORT:-8888})"]
+      test: ["CMD", "test", "-e", "/dev/ttyESP32"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -108,16 +129,22 @@ services:
 
   # ── rviz ──────────────────────────────────────────────────────────────────
   # Runs RViz2 with X11 forwarding to the host desktop.
-  # Requires: xhost +local:docker on the host before starting.
+  # Requires on the host before starting:
+  #   xhost +local:docker
   # Start manually: docker compose up rviz (not part of default stack)
   rviz:
     <<: *ros-service
+    # Run as host user so the X11 socket (owned by the login user) is accessible.
+    # UID/GID are expanded at runtime; override with UID/GID env vars if needed.
+    user: "${UID:-1000}:${GID:-1000}"
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       DISPLAY: ${DISPLAY:-:0}
+      XAUTHORITY: /tmp/.host_Xauthority
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-${HOME}/.Xauthority}:/tmp/.host_Xauthority:ro
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
     command: >
@@ -150,7 +177,7 @@ services:
     command: >
       bash -c "ros2 bag record
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
-      /joy /cmd_vel /wheel_velocities /wheel_velocities_cmd /odom /joint_states /diagnostics"
+      /joy /cmd_vel /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics"
 
 # ---------------------------------------------------------------------------
 # Named volumes (none — bags use bind-mount for host accessibility)

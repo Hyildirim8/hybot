@@ -57,8 +57,10 @@ def generate_launch_description() -> LaunchDescription:
         }],
     )
 
-    # ── controller_manager ────────────────────────────────────────────────
+    # ── controller_manager ────────────────────────────────────────────────────
     # Loads topic_based_ros2_control hardware plugin + manages controllers.
+    # Remap: mecanum_drive_controller publishes reference_unstamped inside the
+    # controller_manager namespace. Remap it to /cmd_vel so teleop connects.
     controller_manager_node = Node(
         package="controller_manager",
         executable="ros2_control_node",
@@ -67,6 +69,11 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {"robot_description": robot_description_content},
             controllers_yaml,
+        ],
+        remappings=[
+            # Remap mecanum_drive_controller's namespaced TF odometry publisher
+            # so odom→base_link reaches the global /tf topic that RViz reads.
+            ("/controller_manager/tf_odometry", "/tf"),
         ],
     )
 
@@ -79,6 +86,15 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── Spawn mecanum_drive_controller (after jsb is up) ──────────────────
+    # NOTE: --param-file is intentionally omitted here. The controller_manager
+    # node already receives controllers_yaml in its parameters=[] list above,
+    # and the /**  wildcard in controllers.yaml ensures mecanum params reach
+    # the controller node. Passing --param-file causes CM to accumulate
+    # duplicate params_file entries on each restart (Humble bug).
+    #
+    # The --ros-args remap connects the controller's ~/reference subscription
+    # to the top-level /cmd_vel topic published by the teleop node.
+    # use_stamped_vel: false (in controllers.yaml) makes it accept Twist, not TwistStamped.
     spawn_mecanum = TimerAction(
         period=2.0,
         actions=[Node(
@@ -87,16 +103,28 @@ def generate_launch_description() -> LaunchDescription:
             arguments=[
                 "mecanum_drive_controller",
                 "--controller-manager", "/controller_manager",
-                "--param-file", controllers_yaml,
             ],
             output="screen",
         )],
+    )
+
+    # ── wheel_bridge ─────────────────────────────────────────────────────────
+    # Converts between topic_based_ros2_control's sensor_msgs/JointState topics
+    # and the ESP32 firmware's std_msgs/Float32MultiArray topics.
+    #   /wheel_velocities_cmd (JointState)  → /wheel_velocities_cmd_f32 (F32MA) → ESP32
+    #   /wheel_velocities     (F32MA, ESP32) → /wheel_velocities_js (JointState) → ros2_control
+    wheel_bridge_node = Node(
+        package="ecza_description",
+        executable="wheel_bridge.py",
+        name="wheel_bridge",
+        output="screen",
     )
 
     return LaunchDescription([
         use_sim_time_arg,
         robot_state_publisher_node,
         controller_manager_node,
+        wheel_bridge_node,
         spawn_jsb,
         spawn_mecanum,
     ])

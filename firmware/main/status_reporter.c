@@ -95,7 +95,7 @@ static void status_timer_cb(rcl_timer_t *timer, int64_t last_call_time)
 
 /* ─── Public API ────────────────────────────────────────────────────────── */
 
-void status_reporter_init(rcl_node_t *node, rclc_executor_t *executor)
+void status_reporter_init(rcl_node_t *node, rclc_support_t *support, rclc_executor_t *executor)
 {
     /* Create BEST_EFFORT publisher for /firmware_status (FR-011) */
     rcl_ret_t rc = rclc_publisher_init_best_effort(
@@ -113,7 +113,7 @@ void status_reporter_init(rcl_node_t *node, rclc_executor_t *executor)
 
     /* rclc 1 Hz timer — fires in executor task, not Tmr Svc */
     s_timer = rcl_get_zero_initialized_timer();
-    rc = rclc_timer_init_default2(&s_timer, executor->context,
+    rc = rclc_timer_init_default2(&s_timer, support,
                                   RCL_MS_TO_NS(1000), status_timer_cb, true);
     if (rc != RCL_RET_OK) {
         ESP_LOGE(TAG, "rclc_timer_init_default failed: %ld", (long)rc);

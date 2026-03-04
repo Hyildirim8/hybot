@@ -7,15 +7,16 @@
  *   3. Load configuration from NVS
  *   4. Initialise motor LEDC channels
  *   5. Initialise software watchdog (starts in TIMED_OUT state)
- *   6. Connect to WiFi
- *   7. Init micro-ROS node, subscriber, status reporter
- *   8. Spin executor; on session loss → stop motors → retry
+ *   6. Init micro-ROS node over USB serial, subscriber, status reporter
+ *   7. Spin executor; on session loss → stop motors → retry
+ *
+ * WiFi is no longer used. The ESP32-S3 native USB port (CDC-ACM) carries
+ * the micro-ROS XRCE session directly to the host via /dev/ttyACM*.
  */
 
 #include "nvs_config.h"
 #include "motor.h"
 #include "watchdog.h"
-#include "wifi.h"
 #include "uros_transport.h"
 #include "velocity_subscriber.h"
 #include "status_reporter.h"
@@ -27,9 +28,10 @@
 
 static const char *TAG = "app_main";
 
-/* Spin timeout: 100 ms — gives executor a chance to process incoming messages
- * while keeping the TWDT fed via esp_task_wdt_reset() in the loop.          */
-#define SPIN_TIMEOUT_NS    (100ULL * 1000000ULL)   /* 100 ms in nanoseconds */
+/* Spin timeout: 50 ms — drain the USB CDC RX buffer frequently so XRCE frames
+ * are not delayed behind a 100 ms poll boundary.  TWDT is fed each iteration
+ * (2000 ms limit) so the tighter loop is safe.                              */
+#define SPIN_TIMEOUT_NS    (50ULL * 1000000ULL)    /* 50 ms in nanoseconds */
 #define RECONNECT_DELAY_MS 2000
 
 void app_main(void)
@@ -49,10 +51,6 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_task_wdt_reconfigure(&twdt_cfg));
 
-    /* IDF auto-subscribes main task when CONFIG_ESP_TASK_WDT_INIT=y.
-     * Unsubscribe now so WiFi init (can block >2 s) doesn't trigger TWDT.  */
-    esp_task_wdt_delete(NULL);   /* ignore error — may not be subscribed yet */
-
     /* ── 3. Load NVS configuration ──────────────────────────────────────── */
     RoverConfig cfg;
     nvs_config_load(&cfg);
@@ -61,8 +59,10 @@ void app_main(void)
     watchdog_init(cfg.watchdog_timeout_ms);
     watchdog_expire_cb();   /* ensure safe default before first command (T020) */
 
-    /* ── 5. WiFi ────────────────────────────────────────────────────────── */
-    wifi_init_sta(&cfg);
+    /* ── 5. One-time TinyUSB driver install (must happen before retry loop) */
+    /* Installing inside the retry loop causes ESP_ERR_INVALID_STATE on the   */
+    /* second attempt, leaving CDC-ACM uninitialized and silently broken.      */
+    uros_transport_hw_init();
 
     /* ── 6. micro-ROS + executor spin loop with reconnect ──────────────── */
     while (true) {
@@ -80,11 +80,13 @@ void app_main(void)
 
         /* Register subscriber and status publisher with the executor */
         velocity_subscriber_init(&node, &executor);
-        status_reporter_init(&node, &executor);
+        status_reporter_init(&node, &support, &executor);
 
         /* Subscribe main task to TWDT only now — blocking init phase is done.
-         * Delete first in case we are re-entering after a reconnect.        */
-        esp_task_wdt_delete(NULL);          /* no-op if not subscribed */
+         * Only delete first if already subscribed (avoids 'task not found').*/
+        if (esp_task_wdt_status(NULL) == ESP_OK) {
+            esp_task_wdt_delete(NULL);
+        }
         ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
         esp_task_wdt_reset();
 
@@ -99,6 +101,10 @@ void app_main(void)
                 ESP_LOGW(TAG, "session loss — tearing down and reconnecting");
                 break;
             }
+
+            /* Software watchdog is reset only in velocity_callback() when a
+             * command actually arrives — not here.  This means motors stop
+             * if commands cease even while the XRCE session stays up.      */
         }
 
         /* Tear down and retry */
@@ -108,10 +114,8 @@ void app_main(void)
         velocity_subscriber_fini(&node);
         uros_fini(&node, &support);
 
-        for (int i = 0; i < RECONNECT_DELAY_MS / 100; i++) {
-            vTaskDelay(pdMS_TO_TICKS(100));
-            esp_task_wdt_reset();
-        }
+        /* Simple delay — no TWDT reset here, task is unsubscribed above. */
+        vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
     }
 }
 

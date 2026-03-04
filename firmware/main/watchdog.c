@@ -7,23 +7,43 @@
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "freertos/timers.h"
 
 static const char *TAG = "watchdog";
 
 volatile WatchdogState g_watchdog_state = WDG_STATE_TIMED_OUT;
 
-static TimerHandle_t s_timer = NULL;
+static TimerHandle_t s_timer     = NULL;
+static TaskHandle_t  s_wdg_task  = NULL;
 
-/* FreeRTOS timer callback — runs in timer daemon task context */
+/* Dedicated watchdog expiry task — has its own stack so that motor_stop_all()
+ * and ESP_LOGW do not execute inside the tiny Tmr Svc stack (≈2 KiB).      */
+static void wdg_expire_task(void *arg)
+{
+    (void)arg;
+    while (true) {
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        watchdog_expire_cb();
+    }
+}
+
+/* FreeRTOS timer callback — runs in Tmr Svc; do NO heavy work here.
+ * Just unblock the dedicated expiry task via a direct notification.         */
 static void timer_cb(TimerHandle_t xTimer)
 {
     (void)xTimer;
-    watchdog_expire_cb();
+    if (s_wdg_task) {
+        xTaskNotifyGive(s_wdg_task);
+    }
 }
 
 void watchdog_init(uint32_t timeout_ms)
 {
+    /* Spawn the expiry task first so timer_cb can reference s_wdg_task safely */
+    xTaskCreate(wdg_expire_task, "wdg_expire", 4096, NULL,
+                configMAX_PRIORITIES - 2, &s_wdg_task);
+
     s_timer = xTimerCreate(
         "wdg_timer",
         pdMS_TO_TICKS(timeout_ms),

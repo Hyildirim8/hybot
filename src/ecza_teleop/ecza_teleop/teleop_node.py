@@ -60,7 +60,15 @@ class TeleopNode(Node):
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
         # ── Publishers / Subscribers ──────────────────────────────────────
-        self._cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
+        # Use BEST_EFFORT QoS to match mecanum_drive_controller's subscription
+        # (ros2_control ChainableControllerInterface uses BEST_EFFORT for reference topics)
+        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+        best_effort_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._cmd_pub = self.create_publisher(Twist, "cmd_vel", best_effort_qos)
         self._joy_sub = self.create_subscription(Joy, "joy", self._joy_cb, 10)
 
         # ── Watchdog timer ────────────────────────────────────────────────

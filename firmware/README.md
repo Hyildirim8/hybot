@@ -34,7 +34,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 | Topic | Direction | Message type | QoS | Description |
 |-------|-----------|-------------|-----|-------------|
-| `/wheel_velocities` | Subscribe | `std_msgs/msg/Float32MultiArray` | RELIABLE / VOLATILE / KEEP_LAST(1) | Per-wheel speed commands in rad/s; array length must be 4; order: FL[0] FR[1] RL[2] RR[3] |
+| `/wheel_velocities_cmd_f32` | Subscribe | `std_msgs/msg/Float32MultiArray` | BEST_EFFORT / VOLATILE | Per-wheel speed commands in rad/s; array length must be 4; order: FL[0] FR[1] RL[2] RR[3] |
 | `/firmware_status`  | Publish   | `std_msgs/msg/String` (JSON)    | BEST_EFFORT / VOLATILE / KEEP_LAST(1) | Status at ≥1 Hz; see JSON schema below |
 
 ### ROS2 node identity
@@ -48,7 +48,7 @@ idf.py -p /dev/ttyUSB0 flash monitor
 Verify after launch:
 ```bash
 ros2 node list          # shows /rover/esp32_firmware_node
-ros2 topic list         # shows /wheel_velocities and /firmware_status
+ros2 topic list         # shows /wheel_velocities_cmd_f32 and /firmware_status
 ros2 topic hz /firmware_status   # should be ≥1 Hz
 ```
 
@@ -74,7 +74,7 @@ Fields:
 | `watchdog_state` | string | `"active"` = commands arriving; `"timed_out"` = watchdog stopped motors |
 | `motor_faults` | bool[4] | Per-motor fault flags (FL FR RL RR); currently always false until fault-pin GPIO is wired |
 | `uptime_ms` | uint | Firmware uptime in milliseconds since boot |
-| `malformed_msg_count` | uint | Count of discarded malformed `/wheel_velocities` messages |
+| `malformed_msg_count` | uint | Count of discarded malformed `/wheel_velocities_cmd_f32` messages |
 
 ---
 

@@ -191,21 +191,36 @@
   <!-- ── ros2_control — topic_based hardware interface ─────────────────── -->
   <!--
     topic_based_ros2_control bridges joint velocity commands and states via
-    ROS topics, connecting mecanum_drive_controller to the ESP32 micro-ROS.
+    ROS topics using sensor_msgs/JointState.
 
-    Command topic : /wheel_velocities_cmd  (std_msgs/Float32MultiArray)
-      data = [fl, fr, rl, rr] rad/s  (written by mecanum_drive_controller)
-    State topic   : /wheel_velocities      (std_msgs/Float32MultiArray)
-      data = [fl, fr, rl, rr] rad/s  (published by ESP32 micro-ROS)
+    The wheel_bridge node (hardware.launch.py) adapts between these JointState
+    topics and the ESP32 Float32MultiArray topics:
 
-    Joint order must match the array index order used in velocity_subscriber.c:
+    Command flow:
+      mecanum_drive_controller
+        → /wheel_velocities_cmd  (JointState, topic_based publishes)
+        → wheel_bridge           (converts to Float32MultiArray)
+        → /wheel_velocities_cmd_f32 (Float32MultiArray → ESP32)
+
+    State flow:
+      ESP32 → /wheel_velocities  (Float32MultiArray)
+        → wheel_bridge           (converts to JointState)
+        → /wheel_velocities_js   (JointState → topic_based reads)
+
+    Joint order must match firmware velocity_subscriber.c:
       0=fl  1=fr  2=rl  3=rr
   -->
   <ros2_control name="ecza_rover_hardware" type="system">
     <hardware>
       <plugin>topic_based_ros2_control/TopicBasedSystem</plugin>
       <param name="joint_commands_topic">/wheel_velocities_cmd</param>
-      <param name="joint_states_topic">/wheel_velocities</param>
+      <param name="joint_states_topic">/wheel_velocities_js</param>
+      <!-- Set to -1 so write() always publishes: the default threshold check
+           compares POSITION interface diffs, but we only use VELOCITY.
+           Since both position arrays stay at 0.0, diff would always be 0,
+           causing write() to skip publishing. A negative threshold disables
+           the guard entirely. -->
+      <param name="trigger_joint_command_threshold">-1.0</param>
     </hardware>
 
     <joint name="fl_wheel_joint">

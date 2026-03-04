@@ -1,10 +1,13 @@
 /**
- * uros_transport.c — micro-ROS UDP transport and node lifecycle
+ * uros_transport.c — micro-ROS USB CDC-ACM transport and node lifecycle
  *
- * Uses the built-in UDP/WiFi transport provided by micro_ros_espidf_component:
- *   - WiFi is already connected by wifi.c before uros_init() is called
- *   - Agent IP/port are passed via rmw_uros_options_set_udp_address
- *   - rclc_support_init_with_options wires up the DDS participant to the agent
+ * Uses TinyUSB CDC-ACM custom transport (esp32s2_usbcdc_transport component):
+ *   - Connect the ESP32-S3 USB-C port directly to the host PC / RPi
+ *   - Device appears as /dev/ttyACM0 (or ttyACM1) on the host
+ *   - No WiFi, GPIO wiring, or IP networking required
+ *   - Start the micro-ROS agent on the host with:
+ *       ros2 run micro_ros_agent micro_ros_agent serial --dev /dev/ttyACM0 -b 115200
+ *     OR via docker compose (SERIAL_DEV=/dev/ttyACM0 docker compose up)
  */
 
 #include "uros_transport.h"
@@ -24,8 +27,14 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
+#include <rmw_microros/custom_transport.h>
+
+#include "esp32s2_usbcdc_transport.h"   /* TinyUSB CDC-ACM custom transport */
 
 static const char *TAG = "uros_transport";
+
+/* Use the first CDC-ACM interface (the only one we register) */
+static tinyusb_cdcacm_itf_t s_cdc_port = TINYUSB_CDC_ACM_0;
 
 /* Allocator must outlive the executor — keep it at file scope.
  * rcl_get_default_allocator() always returns the same function pointers
@@ -49,21 +58,27 @@ bool uros_init(const RoverConfig *cfg,
 {
     s_allocator = rcl_get_default_allocator();
 
-    /* Build init options and set agent UDP address */
+    /* Install the USB CDC-ACM custom transport.
+     * framing=true enables XRCE serial framing (required for CDC/UART).
+     * args=&s_cdc_port passes the CDC interface number to open/close/read/write. */
+    rmw_ret_t rmw_ret = rmw_uros_set_custom_transport(
+        true,
+        (void *)&s_cdc_port,
+        esp32s2_usbcdc_open,
+        esp32s2_usbcdc_close,
+        esp32s2_usbcdc_write,
+        esp32s2_usbcdc_read
+    );
+
+    if (rmw_ret != RMW_RET_OK) {
+        ESP_LOGE(TAG, "rmw_uros_set_custom_transport failed: %ld", (long)rmw_ret);
+        return false;
+    }
+
+    /* Build init options (no UDP address needed for serial transport) */
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     UROS_CHECK(rcl_init_options_init(&init_options, s_allocator),
                "rcl_init_options_init");
-
-    rmw_init_options_t *rmw_options =
-        rcl_init_options_get_rmw_init_options(&init_options);
-
-    /* Convert agent_port (uint16) to string for the API */
-    char port_str[8];
-    snprintf(port_str, sizeof(port_str), "%u", cfg->agent_port);
-
-    UROS_CHECK(rmw_uros_options_set_udp_address(cfg->agent_ip, port_str,
-                                                rmw_options),
-               "rmw_uros_options_set_udp_address");
 
     /* NOTE: Do NOT call rcl_init_options_set_domain_id() for micro-ROS.
      * micro-XRCE-DDS transports all topics inside a single XRCE session;
@@ -71,14 +86,18 @@ bool uros_init(const RoverConfig *cfg,
      * ROS_DOMAIN_ID env var, not by the XRCE client.  Setting it here
      * causes rmw_microxrcedds to fail immediately on the first spin. */
 
-    /* Initialise rclc support — this performs the XRCE session handshake.
-     * Blocks until agent responds or times out (typically 1-3 s).
+    /* Initialise rclc support — this performs the XRCE session handshake
+     * over the USB serial link.  Blocks until agent responds or times out.
      * TWDT is not watching main during this call (unsubscribed in app_main). */
     UROS_CHECK(rclc_support_init_with_options(support, 0, NULL,
                                               &init_options, &s_allocator),
                "rclc_support_init_with_options");
 
-    esp_task_wdt_reset();   /* session handshake done; feed TWDT if subscribed */
+    /* Feed TWDT only if this task is already subscribed (it may not be on the
+     * first call — app_main subscribes after uros_init returns).           */
+    if (esp_task_wdt_status(NULL) == ESP_OK) {
+        esp_task_wdt_reset();
+    }
 
     /* Free init_options after support is initialised */
     rcl_init_options_fini(&init_options);
@@ -93,9 +112,8 @@ bool uros_init(const RoverConfig *cfg,
     UROS_CHECK(rclc_executor_init(executor, &support->context, 3, &s_allocator),
                "rclc_executor_init");
 
-    ESP_LOGI(TAG, "micro-ROS node /%s/%s initialised, agent %s:%s",
-             UROS_NAMESPACE, UROS_NODE_NAME,
-             cfg->agent_ip, port_str);
+    ESP_LOGI(TAG, "micro-ROS node /%s/%s initialised over USB CDC-ACM",
+             UROS_NAMESPACE, UROS_NODE_NAME);
     return true;
 }
 

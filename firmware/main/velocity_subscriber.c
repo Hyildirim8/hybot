@@ -57,7 +57,9 @@ static void velocity_callback(const void *msgin)
 
         motor_set_pwm((MotorChannel)i, rpwm, lpwm);     /* FR-003 */
 
-        ESP_LOGI(TAG, "%s: speed=%.3f rad/s  duty=%lu  dir=%s",
+        /* DEBUG only — serial output on the shared USB CDC pipe adds latency
+         * that can stall the micro-ROS XRCE session at high publish rates.  */
+        ESP_LOGD(TAG, "%s: speed=%.3f rad/s  duty=%lu  dir=%s",
                  WHEEL_NAMES[i], (double)speed, (unsigned long)duty,
                  (speed > 0.001f) ? "FWD" : (speed < -0.001f) ? "REV" : "STOP");
     }
@@ -87,20 +89,13 @@ void velocity_subscriber_init(rcl_node_t *node, rclc_executor_t *executor)
         return;
     }
 
-    /* Create subscriber with RELIABLE / VOLATILE / KEEP_LAST(1) QoS (FR-011) */
-    rcl_ret_t rc = rclc_subscription_init_best_effort(
+    /* Use RELIABLE QoS with depth=1 to match the bridge publisher.
+     * The bridge uses depth=1 so only the latest command is ever retransmitted —
+     * no backlog can build up to burst-flood the USB CDC pipe. */
+    rcl_ret_t rc = rclc_subscription_init_default(
         &s_subscriber, node,
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-        "/wheel_velocities");
-
-    /* rclc_subscription_init_best_effort is BEST_EFFORT; use init_default for RELIABLE */
-    if (rc != RCL_RET_OK) {
-        /* Fall back to default (RELIABLE) */
-        rc = rclc_subscription_init_default(
-            &s_subscriber, node,
-            ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
-            "/wheel_velocities");
-    }
+        "/wheel_velocities_cmd_f32");
 
     if (rc != RCL_RET_OK) {
         ESP_LOGE(TAG, "failed to create /wheel_velocities subscriber: %ld", (long)rc);
@@ -117,7 +112,7 @@ void velocity_subscriber_init(rcl_node_t *node, rclc_executor_t *executor)
         return;
     }
 
-    ESP_LOGI(TAG, "/wheel_velocities subscriber registered (RELIABLE/VOLATILE/KEEP_LAST(1))");
+    ESP_LOGI(TAG, "/wheel_velocities_cmd_f32 subscriber registered (RELIABLE depth=1)");
 }
 
 void velocity_subscriber_fini(rcl_node_t *node)

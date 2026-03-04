@@ -7,7 +7,6 @@ idf_component_register(
         "app_main.c"
         "motor.c"
         "nvs_config.c"
-        "wifi.c"
         "uros_transport.c"
         "velocity_subscriber.c"
         "watchdog.c"
@@ -16,10 +15,14 @@ idf_component_register(
         "."
     REQUIRES
         nvs_flash
-        esp_wifi
-        esp_event
         esp_timer
         driver
         freertos
         micro_ros_espidf_component
+        esp32s2_usbcdc_transport
+        espressif__esp_tinyusb
 )
+
+# micro-ROS ships its own atomic builtins that duplicate newlib's stdatomic;
+# allow both definitions rather than failing at link time.
+target_link_options(${COMPONENT_LIB} INTERFACE -Wl,--allow-multiple-definition)
