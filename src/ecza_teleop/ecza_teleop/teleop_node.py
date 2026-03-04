@@ -175,13 +175,17 @@ class TeleopNode(Node):
 
         # ── Strafe: stick axis PLUS dedicated buttons (additive, clamped) ─
         # Left stick X: pushing right = axis +1 = robot strafe right = vy -1
-        # Button L2(6) → strafe left (+y), Button R2(7) → strafe right (-y)
-        vy_stick = -axis(self._ax_ly) * self._max_lin
+        # Button LT(6) → strafe left:  FL+ FR- RL- RR+  (vy = -max_lin)
+        # Button RT(7) → strafe right: FL- FR+ RL+ RR-  (vy = +max_lin)
+        # NOTE: vy sign is negated vs naive ROS +y=left convention because the
+        # mecanum_drive_controller uses the opposite vy sign internally for this
+        # rover's roller orientation.
+        vy_stick = axis(self._ax_ly) * self._max_lin
         vy_btn = 0.0
         if btn(self._btn_sl):
-            vy_btn += self._max_lin   # strafe left  (+y in ROS frame)
+            vy_btn -= self._max_lin   # strafe left:  FL+ FR- RL- RR+
         if btn(self._btn_sr):
-            vy_btn -= self._max_lin   # strafe right (-y in ROS frame)
+            vy_btn += self._max_lin   # strafe right: FL- FR+ RL+ RR-
         vy = max(-self._max_lin, min(self._max_lin, vy_stick + vy_btn))
 
         # ── Rotation: right stick Y — push up = CCW (+wz) ─────────────

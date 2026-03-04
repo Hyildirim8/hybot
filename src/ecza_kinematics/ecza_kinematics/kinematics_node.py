@@ -13,17 +13,17 @@ Mecanum inverse kinematics:
     FL and RR: rollers at +45° (top-left to bottom-right diagonal)
     FR and RL: rollers at -45° (top-right to bottom-left diagonal)
 
-  Verified against physical wheel spin directions (mobilerobots.pl reference):
+  Physical wheel spin directions (verified on hardware):
     Forward  (vx>0):        FL+ FR+ RL+ RR+
-    Strafe R (vy<0, ROS):   FL- FR+ RL+ RR-   (FL/RR backward, FR/RL forward)
-    Strafe L (vy>0, ROS):   FL+ FR- RL- RR+
+    Strafe L (vy<0, ROS):   FL+ FR- RL- RR+   (FL/RR forward, FR/RL backward)
+    Strafe R (vy>0, ROS):   FL- FR+ RL+ RR-   (FL/RR backward, FR/RL forward)
     CCW rot  (wz>0):        FL- FR+ RL- RR+
 
-  Corrected equations:
-    ω_FL = (1/r) * ( vx + vy - (lx+ly)*wz)
-    ω_FR = (1/r) * ( vx - vy + (lx+ly)*wz)
-    ω_RL = (1/r) * ( vx - vy - (lx+ly)*wz)
-    ω_RR = (1/r) * ( vx + vy + (lx+ly)*wz)
+  Equations (vy sign matches mecanum_drive_controller convention):
+    ω_FL = (1/r) * ( vx - vy - (lx+ly)*wz)
+    ω_FR = (1/r) * ( vx + vy + (lx+ly)*wz)
+    ω_RL = (1/r) * ( vx + vy - (lx+ly)*wz)
+    ω_RR = (1/r) * ( vx - vy + (lx+ly)*wz)
 
   where:
     r   = wheel_radius (m)
@@ -103,12 +103,13 @@ class MecanumKinematicsNode(Node):
         k = self._lx + self._ly  # combined half-wheelbase factor
 
         # Inverse kinematics — rad/s for each wheel
-        # Verified against physical roller orientation (O-config):
-        #   FL/RR share one diagonal, FR/RL share the other
-        fl = ( vx + vy - k * wz) / r
-        fr = ( vx - vy + k * wz) / r
-        rl = ( vx - vy - k * wz) / r
-        rr = ( vx + vy + k * wz) / r
+        # vy sign matches mecanum_drive_controller: negative vy = strafe left
+        #   FL+ FR- RL- RR+  when vy < 0  (strafe left)
+        #   FL- FR+ RL+ RR-  when vy > 0  (strafe right)
+        fl = ( vx - vy - k * wz) / r
+        fr = ( vx + vy + k * wz) / r
+        rl = ( vx + vy - k * wz) / r
+        rr = ( vx - vy + k * wz) / r
 
         self._last_wheel_vel = [fl, fr, rl, rr]
 
