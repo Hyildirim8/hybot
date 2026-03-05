@@ -76,6 +76,16 @@ RUN apt-get update -qq && \
         ros-humble-robot-state-publisher \
         ros-humble-joint-state-publisher \
         ros-humble-rviz2 \
+        # Qt display backends: wayland-native + XWayland (xcb) fallback
+        qtwayland5 \
+        libxcb-xinerama0 \
+        libxcb-icccm4 \
+        libxcb-image0 \
+        libxcb-keysyms1 \
+        libxcb-randr0 \
+        libxcb-render-util0 \
+        libxcb-xkb1 \
+        libxkbcommon-x11-0 \
         ros-humble-ros2-control \
         ros-humble-ros2-controllers \
         ros-humble-mecanum-drive-controller \

@@ -128,29 +128,56 @@ services:
       - teleop
 
   # ── rviz ──────────────────────────────────────────────────────────────────
-  # Runs RViz2 with X11 forwarding to the host desktop.
-  # Requires on the host before starting:
-  #   xhost +local:docker
-  # Start manually: docker compose up rviz (not part of default stack)
+  # Runs RViz2 inside the container, rendered via Wayland (labwc + wayvnc).
+  #
+  # Activated by the 'rviz' profile:
+  #   bash scripts/launch.sh --rviz
+  #   bash scripts/rviz.sh --docker          (standalone, no other services)
+  #
+  # Display: Wayland-native via the host's /run/user/1000/wayland-0 socket.
+  # The socket path is hardcoded for UID 1000 (the 'master' user on this RPi).
+  # XWayland (:0) is also mounted as a fallback.
+  #
+  # The command waits 8 s before launching so robot_state_publisher has time
+  # to advertise /robot_description before RViz tries to subscribe to it.
   rviz:
     <<: *ros-service
-    # Run as host user so the X11 socket (owned by the login user) is accessible.
-    # UID/GID are expanded at runtime; override with UID/GID env vars if needed.
-    user: "${UID:-1000}:${GID:-1000}"
+    profiles:
+      - rviz
+    # Run as the host login user (UID 1000) so the Wayland socket is accessible.
+    user: "1000:1000"
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
-      DISPLAY: ${DISPLAY:-:0}
-      XAUTHORITY: /tmp/.host_Xauthority
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      # Display: use XWayland (xcb) via DISPLAY=:0 — more reliable inside
+      # Docker on RPi/labwc than the wayland socket. Wayland socket is still
+      # mounted so qtwayland5 can be used if xcb is unavailable.
+      DISPLAY: ":0"
+      XAUTHORITY: /tmp/.host_Xauthority
+      QT_QPA_PLATFORM: xcb
+      WAYLAND_DISPLAY: wayland-0
+      XDG_RUNTIME_DIR: /run/user/1000
     volumes:
+      # Wayland runtime dir — contains wayland-0 socket
+      - /run/user/1000:/run/user/1000:rw
+      # XWayland socket — fallback
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - ${XAUTHORITY:-${HOME}/.Xauthority}:/tmp/.host_Xauthority:ro
+      - /home/master/.Xauthority:/tmp/.host_Xauthority:ro
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
-    command: >
-      ros2 launch ecza_description display.launch.py
-      gui:=false
-      rvizconfig:=/config/rover.rviz
+    command:
+      - bash
+      - -c
+      - |
+        # Wait for robot_state_publisher to be ready before RViz subscribes.
+        # robot_description service takes ~5 s to start controllers on RPi.
+        # Qt requires 0700 on XDG_RUNTIME_DIR; host labwc creates it 0770.
+        chmod 0700 /run/user/1000 2>/dev/null || true
+        echo "[rviz] waiting 8 s for robot_state_publisher..."
+        sleep 8
+        exec ros2 launch ecza_description display.launch.py \
+          gui:=false \
+          rvizconfig:=/config/rover.rviz
     restart: "no"
     depends_on:
       - robot_description
