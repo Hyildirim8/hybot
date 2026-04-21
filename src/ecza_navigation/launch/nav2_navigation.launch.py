@@ -24,7 +24,7 @@ Data flow:
     → AMCL       (nav  mode)  → odom→map TF (localisation)
   /odom (from mecanum_drive_controller)
     → Nav2 costmaps, planners, controllers
-  Nav2 → /cmd_vel → mecanum_drive_controller → ESP32 → motors
+  Nav2 → /cmd_vel_nav → teleop_node AUTO gate → mecanum_drive_controller → ESP32 → motors
 """
 
 import os
@@ -37,7 +37,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import (EqualsSubstitution, LaunchConfiguration,
                                    PathJoinSubstitution)
-from launch_ros.actions import Node, SetParameter
+from launch_ros.actions import Node, SetParameter, SetRemap
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -89,33 +89,45 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── Nav2 Bringup ──────────────────────────────────────────────────────
+    # Keep Nav2 commands on a separate topic. teleop_node is the only node
+    # that forwards them to the controller, and only while AUTO mode is active.
     # slam mode: no map_server, no AMCL (SLAM publishes /map itself)
-    nav2_slam = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, "launch", "navigation_launch.py")
-        ),
+    nav2_slam = GroupAction(
         condition=IfCondition(EqualsSubstitution(mode, "slam")),
-        launch_arguments={
-            "use_sim_time":  use_sim_time,
-            "params_file":   params_file,
-            "use_composition": "False",
-            "use_respawn":   "True",
-        }.items(),
+        actions=[
+            SetRemap(src="/cmd_vel", dst="/cmd_vel_nav"),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(pkg_nav2, "launch", "navigation_launch.py")
+                ),
+                launch_arguments={
+                    "use_sim_time":  use_sim_time,
+                    "params_file":   params_file,
+                    "use_composition": "False",
+                    "use_respawn":   "True",
+                }.items(),
+            ),
+        ],
     )
 
     # nav mode: full bringup with map_server + AMCL
-    nav2_nav = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(pkg_nav2, "launch", "bringup_launch.py")
-        ),
+    nav2_nav = GroupAction(
         condition=IfCondition(EqualsSubstitution(mode, "nav")),
-        launch_arguments={
-            "use_sim_time":  use_sim_time,
-            "params_file":   params_file,
-            "map":           map_yaml,
-            "use_composition": "False",
-            "use_respawn":   "True",
-        }.items(),
+        actions=[
+            SetRemap(src="/cmd_vel", dst="/cmd_vel_nav"),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    os.path.join(pkg_nav2, "launch", "bringup_launch.py")
+                ),
+                launch_arguments={
+                    "use_sim_time":  use_sim_time,
+                    "params_file":   params_file,
+                    "map":           map_yaml,
+                    "use_composition": "False",
+                    "use_respawn":   "True",
+                }.items(),
+            ),
+        ],
     )
 
     # ── Logging ───────────────────────────────────────────────────────────

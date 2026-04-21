@@ -64,7 +64,11 @@ services:
   # dead-man switch, and speed-limit parameters from rover_params.yaml.
   teleop:
     <<: *ros-service
-    volumes: *config-mount
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/controllers.yaml:/config/controllers.yaml:ro
+      - ./src/ecza_teleop/ecza_teleop/teleop_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/teleop_node.py:ro
     command:
       - ros2
       - run
@@ -73,8 +77,6 @@ services:
       - --ros-args
       - --params-file
       - /config/rover_params.yaml
-      - -r
-      - cmd_vel:=/controller_manager/reference_unstamped
     depends_on:
       - joy
 
@@ -195,7 +197,35 @@ services:
     command: >
       bash -c "ros2 bag record
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
-      /joy /cmd_vel /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
+      /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
+
+  # ── slam_manager ──────────────────────────────────────────────────────────
+  # SLAM haritalama yöneticisi ve otonom frontier keşfi.
+  # Joystick tuşları:
+  #   A (btn 1) — otonom frontier keşfini aç/kapat (AUTO mod gerekli)
+  #   Y (btn 3) — mevcut SLAM haritasını /maps/ dizinine kaydet
+  # Profile: nav — sadece navigasyon yığını ile çalışır
+  slam_manager:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/controllers.yaml:/config/controllers.yaml:ro
+      - ./maps:/maps:rw
+      - ./src/ecza_teleop/ecza_teleop/slam_manager_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py:ro
+    command:
+      - ros2
+      - run
+      - ecza_teleop
+      - slam_manager_node
+      - --ros-args
+      - --params-file
+      - /config/rover_params.yaml
+    restart: unless-stopped
+    depends_on:
+      - navigation
 
   # ── lidar ─────────────────────────────────────────────────────────────────
   # RPLidar A2M12 driver. Publishes /scan (sensor_msgs/LaserScan).
@@ -252,6 +282,10 @@ services:
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./maps:/maps:rw
+      # Bind-mount güncel config dosyaları — image rebuild gerektirmeden aktif olur
+      - ./src/ecza_navigation/config/nav2_params.yaml:/ws/install/share/ecza_navigation/config/nav2_params.yaml:ro
+      - ./src/ecza_navigation/config/slam_params.yaml:/ws/install/share/ecza_navigation/config/slam_params.yaml:ro
+      - ./src/ecza_navigation/launch/nav2_navigation.launch.py:/ws/install/share/ecza_navigation/launch/nav2_navigation.launch.py:ro
     command:
       - bash
       - -c
@@ -260,9 +294,9 @@ services:
         # Wait for the rest of the stack (hardware, lidar) to register their
         # ROS2 services before launching Nav2. The lifecycle_manager's internal
         # get_state service client has a hardcoded 2s timeout; if nodes are
-        # still initialising when it fires, bringup fails. A 10s sleep ensures
+        # still initialising when it fires, bringup fails. A 15s sleep ensures
         # all servers are ready on slow hardware (Raspberry Pi).
-        sleep 10
+        sleep 15
         if [ "$$MODE" = "nav" ] && [ -n "$${MAP:-}" ]; then
           exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=nav map:=$$MAP
         else

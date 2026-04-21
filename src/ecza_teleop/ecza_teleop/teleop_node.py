@@ -1,12 +1,12 @@
 """
 teleop_node.py — Joy → cmd_vel for ecza-robotu mecanum rover.
 
-Reads sensor_msgs/Joy and publishes geometry_msgs/Twist on /cmd_vel.
+Reads sensor_msgs/Joy and publishes geometry_msgs/Twist to the controller reference.
 
 Modes
 -----
-  TELEOP (default) — joystick drives the robot via /cmd_vel.
-    AUTO             — joystick output is muted; Nav2 /cmd_vel is forwarded
+  TELEOP (default) — joystick drives the controller reference directly.
+    AUTO             — joystick output is muted; Nav2 /cmd_vel_nav is forwarded
                                          to the controller command output.
                      Press btn_auto_mode again to return to TELEOP.
 
@@ -25,14 +25,17 @@ Parameters (from rover_params.yaml):
   require_enable_button (bool, default false)
   btn_strafe_left       (int, default 6)    — full-speed strafe left  (LT)
   btn_strafe_right      (int, default 7)    — full-speed strafe right (RT)
-  btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
+    btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
     btn_auto_mode_alt     (int, default -1)   — optional alternate toggle button
+    btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
     nav_cmd_topic         (str, default /cmd_vel_nav) — Nav2 command topic in AUTO mode
     start_in_autonomous   (bool, default true) — startup in AUTO so first Start enables joystick
   max_linear_speed      (float, default 1.5) m/s
   max_angular_speed     (float, default 3.0) rad/s
   joy_deadzone          (float, default 0.05)
   joy_watchdog_timeout_ms (int, default 500) ms
+  reject_extreme_axis_startup (bool, default true) — ignore invalid startup
+                     frames where all mapped joystick axes report ±1.0
 """
 
 import math
@@ -42,7 +45,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import Twist
-from sensor_msgs.msg import Joy
+from sensor_msgs.msg import Joy, LaserScan
 from std_msgs.msg import Bool
 
 
@@ -61,6 +64,7 @@ class TeleopNode(Node):
         self.declare_parameter("btn_strafe_right", 7)
         self.declare_parameter("btn_auto_mode", 9)   # Start button
         self.declare_parameter("btn_auto_mode_alt", -1)
+        self.declare_parameter("btn_auto_mode_candidates", [9, 8])
         self.declare_parameter("auto_toggle_debounce_ms", 400)  # minimum interval between mode toggles
         self.declare_parameter("nav_cmd_topic", "/cmd_vel_nav")
         self.declare_parameter("start_in_autonomous", True)
@@ -68,6 +72,11 @@ class TeleopNode(Node):
         self.declare_parameter("max_angular_speed", 1.0)
         self.declare_parameter("joy_deadzone", 0.05)
         self.declare_parameter("joy_watchdog_timeout_ms", 500)
+        self.declare_parameter("reject_extreme_axis_startup", True)
+        self.declare_parameter("enable_scan_safety", True)
+        self.declare_parameter("scan_topic", "/scan")
+        self.declare_parameter("front_obstacle_stop_distance", 0.45)
+        self.declare_parameter("front_obstacle_angle_deg", 35.0)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -79,29 +88,47 @@ class TeleopNode(Node):
         self._btn_sr = self.get_parameter("btn_strafe_right").value
         self._btn_auto = self.get_parameter("btn_auto_mode").value
         self._btn_auto_alt = self.get_parameter("btn_auto_mode_alt").value
+        self._btn_auto_candidates = self._normalise_button_candidates(
+            self.get_parameter("btn_auto_mode_candidates").value
+        )
         self._auto_toggle_debounce_ms = int(self.get_parameter("auto_toggle_debounce_ms").value)
         self._nav_cmd_topic = self.get_parameter("nav_cmd_topic").value
         self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
         self._max_ang = self.get_parameter("max_angular_speed").value
         self._deadzone = self.get_parameter("joy_deadzone").value
+        self._reject_extreme_axis_startup = bool(
+            self.get_parameter("reject_extreme_axis_startup").value
+        )
+        self._enable_scan_safety = bool(self.get_parameter("enable_scan_safety").value)
+        self._scan_topic = self.get_parameter("scan_topic").value
+        self._front_stop_distance = float(
+            self.get_parameter("front_obstacle_stop_distance").value
+        )
+        self._front_angle_rad = math.radians(
+            float(self.get_parameter("front_obstacle_angle_deg").value)
+        )
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
         # ── Autonomous mode state ─────────────────────────────────────────
         self._autonomous = bool(self._start_in_autonomous)  # False = TELEOP, True = AUTO
         self._prev_auto_btn = False       # edge-detect across primary/alt buttons
         self._last_mode_toggle_time = 0.0
+        self._axes_ready = not self._reject_extreme_axis_startup
+        self._front_blocked = False
+        self._front_obstacle_distance = math.inf
 
         # ── Publishers / Subscribers ──────────────────────────────────────
         # Use BEST_EFFORT QoS to match mecanum_drive_controller's subscription
         # (ros2_control ChainableControllerInterface uses BEST_EFFORT for reference topics)
-        from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
         best_effort_qos = QoSProfile(
             depth=10,
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
-        self._cmd_pub = self.create_publisher(Twist, "cmd_vel", best_effort_qos)
+        self._cmd_pub = self.create_publisher(
+            Twist, "/controller_manager/reference_unstamped", best_effort_qos
+        )
 
         # Latched publisher so new subscribers always get the current mode.
         latched_qos = QoSProfile(
@@ -116,6 +143,11 @@ class TeleopNode(Node):
         self._nav_sub = self.create_subscription(
             Twist, self._nav_cmd_topic, self._nav_cmd_cb, best_effort_qos
         )
+        self._scan_sub = None
+        if self._enable_scan_safety:
+            self._scan_sub = self.create_subscription(
+                LaserScan, self._scan_topic, self._scan_cb, best_effort_qos
+            )
 
         # Publish initial mode (TELEOP) immediately so late subscribers see it.
         self._publish_mode()
@@ -131,9 +163,12 @@ class TeleopNode(Node):
             f"az={self._ax_az}, enable_btn={self._btn_en}, "
             f"enable_btn_alt={self._btn_en_alt}, "
             f"strafe_left_btn={self._btn_sl}, strafe_right_btn={self._btn_sr}, "
-            f"auto_mode_btn={self._btn_auto}, auto_mode_btn_alt={self._btn_auto_alt}, "
+            f"auto_mode_buttons={self._auto_button_indices()}, "
             f"nav_cmd_topic={self._nav_cmd_topic}, start_in_autonomous={self._start_in_autonomous}, "
-            f"require_enable={self._require_en}"
+            f"require_enable={self._require_en}, "
+            f"reject_extreme_axis_startup={self._reject_extreme_axis_startup}, "
+            f"scan_safety={self._enable_scan_safety}({self._scan_topic}, "
+            f"{self._front_stop_distance:.2f}m/{math.degrees(self._front_angle_rad):.0f}deg)"
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -144,12 +179,89 @@ class TeleopNode(Node):
         msg.data = self._autonomous
         self._mode_pub.publish(msg)
 
+    def _normalise_button_candidates(self, value) -> list:
+        candidates = []
+        if isinstance(value, (list, tuple)):
+            source = value
+        else:
+            source = [value]
+        for item in source:
+            try:
+                idx = int(item)
+            except (TypeError, ValueError):
+                continue
+            if idx >= 0 and idx not in candidates:
+                candidates.append(idx)
+        return candidates
+
+    def _auto_button_indices(self) -> list:
+        indices = []
+        for idx in (self._btn_auto, self._btn_auto_alt, *self._btn_auto_candidates):
+            try:
+                idx = int(idx)
+            except (TypeError, ValueError):
+                continue
+            if idx >= 0 and idx not in indices:
+                indices.append(idx)
+        return indices
+
     def _apply_deadzone(self, value: float) -> float:
         if abs(value) < self._deadzone:
             return 0.0
         # Rescale so output starts at 0 just past the deadzone edge
         sign = math.copysign(1.0, value)
         return sign * (abs(value) - self._deadzone) / (1.0 - self._deadzone)
+
+    def _raw_axis(self, msg: Joy, idx: int) -> float:
+        if idx < 0 or idx >= len(msg.axes):
+            return 0.0
+        return float(msg.axes[idx])
+
+    def _axis_startup_frame_is_invalid(self, msg: Joy) -> bool:
+        """Detect joystick startup frames that report every mapped axis at ±1."""
+        mapped = [self._ax_lx, self._ax_ly, self._ax_az]
+        values = [self._raw_axis(msg, idx) for idx in mapped if idx >= 0]
+        if not values:
+            return False
+        return all(abs(abs(value) - 1.0) <= 1e-6 for value in values)
+
+    def _button_pressed(self, msg: Joy, idx: int) -> bool:
+        return idx >= 0 and idx < len(msg.buttons) and bool(msg.buttons[idx])
+
+    def _scan_cb(self, msg: LaserScan) -> None:
+        min_distance = math.inf
+        half_angle = max(0.0, self._front_angle_rad / 2.0)
+
+        for i, distance in enumerate(msg.ranges):
+            if not math.isfinite(distance):
+                continue
+            if distance < max(0.0, msg.range_min) or distance > msg.range_max:
+                continue
+
+            angle = msg.angle_min + (i * msg.angle_increment)
+            if abs(math.atan2(math.sin(angle), math.cos(angle))) <= half_angle:
+                min_distance = min(min_distance, float(distance))
+
+        self._front_obstacle_distance = min_distance
+        self._front_blocked = min_distance <= self._front_stop_distance
+
+    def _apply_scan_safety(self, twist: Twist) -> Twist:
+        if (
+            not self._enable_scan_safety
+            or not self._front_blocked
+            or twist.linear.x <= 0.0
+        ):
+            return twist
+
+        safe = Twist()
+        safe.linear.x = 0.0
+        safe.linear.y = twist.linear.y
+        safe.angular.z = twist.angular.z
+        self.get_logger().warn(
+            f"front obstacle at {self._front_obstacle_distance:.2f}m; blocking forward command",
+            throttle_duration_sec=1.0,
+        )
+        return safe
 
     # ── Callbacks ─────────────────────────────────────────────────────────
 
@@ -158,9 +270,9 @@ class TeleopNode(Node):
 
         # ── Autonomous mode toggle (edge-detect to avoid repeat on hold) ──
         # Toggle mode only on explicitly configured button indices.
-        auto_btn_primary = self._btn_auto >= 0 and self._btn_auto < len(msg.buttons) and bool(msg.buttons[self._btn_auto])
-        auto_btn_alt = self._btn_auto_alt >= 0 and self._btn_auto_alt < len(msg.buttons) and bool(msg.buttons[self._btn_auto_alt])
-        auto_btn_now = auto_btn_primary or auto_btn_alt
+        auto_btn_now = any(
+            self._button_pressed(msg, idx) for idx in self._auto_button_indices()
+        )
         now_s = time.monotonic()
         debounce_s = max(0.0, float(self._auto_toggle_debounce_ms) / 1000.0)
         if auto_btn_now and not self._prev_auto_btn and (now_s - self._last_mode_toggle_time) >= debounce_s:
@@ -177,6 +289,16 @@ class TeleopNode(Node):
         # In AUTO mode the joystick is completely muted — Nav2 owns /cmd_vel.
         if self._autonomous:
             return
+
+        if not self._axes_ready:
+            if self._axis_startup_frame_is_invalid(msg):
+                self.get_logger().warn(
+                    "joy axes look uninitialised at startup; publishing zero until sticks move",
+                    throttle_duration_sec=5.0,
+                )
+                self._publish_zero()
+                return
+            self._axes_ready = True
 
         # Dead-man switch check
         enabled = True
@@ -222,12 +344,12 @@ class TeleopNode(Node):
         twist.linear.x  = vx
         twist.linear.y  = vy
         twist.angular.z = wz
-        self._cmd_pub.publish(twist)
+        self._cmd_pub.publish(self._apply_scan_safety(twist))
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
         # Forward Nav2 velocity commands only while in AUTO mode.
         if self._autonomous:
-            self._cmd_pub.publish(msg)
+            self._cmd_pub.publish(self._apply_scan_safety(msg))
 
     def _watchdog_cb(self) -> None:
         # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the

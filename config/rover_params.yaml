@@ -46,11 +46,27 @@
     btn_strafe_left: 6             # LT — instant full-speed strafe left  (vy > 0)
     btn_strafe_right: 7            # RT — instant full-speed strafe right (vy < 0)
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
-    btn_auto_mode_alt: -1          # optional alternate toggle disabled
+    btn_auto_mode_alt: 8           # Back — alternate toggle if Start is not mapped as expected
+    btn_auto_mode_candidates: [9, 8] # accept either Start or Back for TELEOP <-> AUTO
     auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
-    nav_cmd_topic: "/cmd_vel"      # Nav2 output topic in Humble bringup
-    start_in_autonomous: true      # allow Nav2 goals immediately after nav stack starts
+    nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
+    start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
+    enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
+    scan_topic: "/scan"
+    front_obstacle_stop_distance: 0.45
+    front_obstacle_angle_deg: 35.0
+
+    # ── slam_manager (SLAM + otonom keşif) ───────────────────────────────────
+    # Buttons (12 total):
+    #   0=X  1=A  2=B  3=Y  4=LB  5=RB  6=LT  7=RT  8=Back  9=Start  10=L3  11=R3
+    btn_save_map: 3                # Y — mevcut SLAM haritasını /maps/ dizinine kaydet
+    btn_explore_toggle: 1          # A — otonom frontier keşfini aç/kapat
+    btn_debounce_ms: 400           # buton sıçramasını önle
+    map_save_dir: "/maps"          # kayıt dizini (navigation container'daki bağlama)
+    frontier_min_cells: 8          # küçük frontier kümelerini görmezden gel
+    goal_timeout_s: 45.0           # saniye — hedef tamamlanmadan önce max bekleme
+    explore_interval_s: 3.0        # saniye — frontier güncelleme periyodu
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
     # Two distinct watchdogs — do not conflate them.
