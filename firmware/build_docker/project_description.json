@@ -1205,12 +1205,12 @@
             "dir": "/work/main",
             "type": "LIBRARY",
             "lib": "__idf_main",
-            "reqs": [ "nvs_flash", "esp_timer", "driver", "freertos", "micro_ros_espidf_component", "esp32s2_usbcdc_transport", "espressif__esp_tinyusb" ],
+            "reqs": [ "nvs_flash", "esp_timer", "driver", "esp_driver_pcnt", "esp_driver_gptimer", "freertos", "micro_ros_espidf_component", "esp32s2_usbcdc_transport", "espressif__esp_tinyusb" ],
             "priv_reqs": [],
             "managed_reqs": [],
             "managed_priv_reqs": [],
             "file": "/work/build_docker/esp-idf/main/libmain.a",
-            "sources": [ "/work/main/app_main.c", "/work/main/motor.c", "/work/main/nvs_config.c", "/work/main/uros_transport.c", "/work/main/velocity_subscriber.c", "/work/main/watchdog.c", "/work/main/status_reporter.c" ],
+            "sources": [ "/work/main/app_main.c", "/work/main/encoder.c", "/work/main/motor.c", "/work/main/nvs_config.c", "/work/main/uros_transport.c", "/work/main/velocity_subscriber.c", "/work/main/watchdog.c", "/work/main/status_reporter.c", "/work/main/wheel_publisher.c", "/work/main/calibration.c" ],
             "include_dirs": [ "." ]
         },
         "mbedtls": {
@@ -2835,7 +2835,7 @@
             "prefix": "idf",
             "dir": "/work/main",
             "lib": "__idf_main",
-            "reqs": [ "nvs_flash", "esp_timer", "driver", "freertos", "micro_ros_espidf_component", "esp32s2_usbcdc_transport", "espressif__esp_tinyusb" ],
+            "reqs": [ "nvs_flash", "esp_timer", "driver", "esp_driver_pcnt", "esp_driver_gptimer", "freertos", "micro_ros_espidf_component", "esp32s2_usbcdc_transport", "espressif__esp_tinyusb" ],
             "priv_reqs": [],
             "managed_reqs": [],
             "managed_priv_reqs": [],

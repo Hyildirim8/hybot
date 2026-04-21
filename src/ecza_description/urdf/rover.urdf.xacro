@@ -9,7 +9,7 @@
   Geometry pulled from config/rover_params.yaml:
     wheel_separation_width : 0.26 m   (left/right centre-to-centre)
     wheel_base             : 0.38 m   (front/rear axle centre-to-centre)
-    wheel_radius           : 0.05 m   (placeholder — update when measured)
+    wheel_radius           : 0.08 m   (measured physical wheel)
 
   Frame convention (ROS REP-103):
     base_link  — geometric centre of chassis, mid-height
@@ -25,7 +25,7 @@
   <xacro:property name="chassis_height"    value="0.08"/>
   <xacro:property name="chassis_mass"      value="3.0"/>   <!-- kg, estimate -->
 
-  <xacro:property name="wheel_radius"      value="0.05"/>
+  <xacro:property name="wheel_radius"      value="0.08"/>  <!-- must match rover_params.yaml and controllers.yaml -->
   <xacro:property name="wheel_width"       value="0.03"/>
   <xacro:property name="wheel_mass"        value="0.15"/>
 
@@ -127,7 +127,7 @@
       The roller_angle rotates the visual stripes around the wheel Z axis to
       indicate the 45° passive roller direction — purely cosmetic in URDF.
   -->
-  <xacro:macro name="mecanum_wheel" params="name x_pos y_pos roller_angle">
+  <xacro:macro name="mecanum_wheel" params="name x_pos y_pos roller_angle axis_y">
     <link name="${name}_wheel_link">
       <!-- Main wheel drum -->
       <visual>
@@ -166,7 +166,7 @@
       <parent link="base_link"/>
       <child  link="${name}_wheel_link"/>
       <origin xyz="${x_pos} ${y_pos} 0" rpy="0 0 0"/>
-      <axis xyz="0 1 0"/>
+      <axis xyz="0 ${axis_y} 0"/>
       <dynamics damping="0.01" friction="0.1"/>
     </joint>
   </xacro:macro>
@@ -175,10 +175,13 @@
        FL/RR: roller_angle = +pi/4  (/ rollers — standard mecanum)
        FR/RL: roller_angle = -pi/4  (\ rollers)
   -->
-  <xacro:mecanum_wheel name="fl" x_pos=" ${cl2}" y_pos=" ${cw2 + wheel_width/2}" roller_angle=" ${pi/4}"/>
-  <xacro:mecanum_wheel name="fr" x_pos=" ${cl2}" y_pos="-${cw2 + wheel_width/2}" roller_angle="-${pi/4}"/>
-  <xacro:mecanum_wheel name="rl" x_pos="-${cl2}" y_pos=" ${cw2 + wheel_width/2}" roller_angle="-${pi/4}"/>
-  <xacro:mecanum_wheel name="rr" x_pos="-${cl2}" y_pos="-${cw2 + wheel_width/2}" roller_angle=" ${pi/4}"/>
+  <!-- axis_y: left wheels use +1 (outward = +Y), right wheels use -1 (outward = -Y).
+       This ensures positive joint velocity = robot-forward for all wheels,
+       matching the firmware's raw pass-through (no per-wheel sign correction). -->
+  <xacro:mecanum_wheel name="fl" x_pos=" ${cl2}" y_pos=" ${cw2 + wheel_width/2}" roller_angle=" ${pi/4}" axis_y= "1"/>
+  <xacro:mecanum_wheel name="fr" x_pos=" ${cl2}" y_pos="-${cw2 + wheel_width/2}" roller_angle="-${pi/4}" axis_y="-1"/>
+  <xacro:mecanum_wheel name="rl" x_pos="-${cl2}" y_pos=" ${cw2 + wheel_width/2}" roller_angle="-${pi/4}" axis_y= "1"/>
+  <xacro:mecanum_wheel name="rr" x_pos="-${cl2}" y_pos="-${cw2 + wheel_width/2}" roller_angle=" ${pi/4}" axis_y="-1"/>
 
   <!-- ── IMU frame (centred on chassis top) ─────────────────────────────── -->
   <link name="imu_link"/>

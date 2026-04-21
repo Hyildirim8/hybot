@@ -43,7 +43,7 @@ def generate_launch_description() -> LaunchDescription:
             "frame_id":        LaunchConfiguration("frame_id"),
             "inverted":        False,
             "angle_compensate": True,
-            "scan_mode":       "Boost",  # A2M12 Boost mode: 16000 samples/s
+            "scan_mode":       "Standard",  # Standard mode: ~8000 samples/s; Boost overflows serial buffer on RPi
         }],
     )
 

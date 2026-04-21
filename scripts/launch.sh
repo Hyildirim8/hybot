@@ -7,6 +7,8 @@
 #   bash scripts/launch.sh --lidar                # base stack + RPLidar driver
 #   bash scripts/launch.sh --nav                  # base stack + lidar + Nav2/SLAM
 #   bash scripts/launch.sh --nav --map /maps/x.yaml  # nav mode with saved map
+#   bash scripts/launch.sh --rviz                 # base stack + RViz2 display
+#   bash scripts/launch.sh --nav --rviz           # nav stack with RViz2
 #   RECORD=true bash scripts/launch.sh            # also start rosbag2 recorder
 #
 # What this script does:
@@ -35,9 +37,19 @@ check_docker_version() {
         exit 1
     }
 
-    # Extract major version: "Docker version 24.0.7, build afdd53b" → 24
-    local major
-    major=$(echo "$raw_version" | grep -oP '(?<=version )\d+')
+    # Extract semver major from first version-like token in output.
+    # Examples handled:
+    #   Docker version 24.0.7, build ...
+    #   Docker version 25.0.3
+    local version_token major
+    version_token=$(echo "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,2}' | head -n1)
+    major=${version_token%%.*}
+
+    if [[ -z "$major" || ! "$major" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Could not parse Docker Engine version." >&2
+        echo "       Found: ${raw_version}" >&2
+        exit 1
+    fi
 
     if [[ "$major" -lt "$REQUIRED_DOCKER_MAJOR" ]]; then
         echo "ERROR: Docker Engine ${REQUIRED_DOCKER_MAJOR}.0 or later is required." >&2
@@ -55,10 +67,20 @@ check_compose_version() {
         exit 1
     }
 
-    # Extract version: "Docker Compose version v2.20.3" → major=2 minor=20
-    local major minor
-    major=$(echo "$raw_version" | grep -oP '(?<=v)\d+(?=\.)')
-    minor=$(echo "$raw_version" | grep -oP '(?<=v\d\.)\d+')
+    # Extract semver major/minor from first version-like token in output.
+    # Handles both:
+    #   Docker Compose version v2.20.3
+    #   Docker Compose version 2.20.3
+    local version_token major minor
+    version_token=$(echo "$raw_version" | grep -Eo '[0-9]+(\.[0-9]+){1,2}' | head -n1)
+    major=${version_token%%.*}
+    minor=$(echo "$version_token" | cut -d. -f2)
+
+    if [[ -z "$major" || -z "$minor" || ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: Could not parse Docker Compose version." >&2
+        echo "       Found: ${raw_version}" >&2
+        exit 1
+    fi
 
     if [[ "$major" -lt "$REQUIRED_COMPOSE_MAJOR" ]] || \
        [[ "$major" -eq "$REQUIRED_COMPOSE_MAJOR" && "$minor" -lt "$REQUIRED_COMPOSE_MINOR" ]]; then
@@ -87,11 +109,12 @@ echo "Docker and Compose versions OK."
 RECORD="${RECORD:-false}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parse flags: --dev, --lidar, --nav, --map <path>
+# Parse flags: --dev, --lidar, --nav, --map <path>, --rviz
 # ─────────────────────────────────────────────────────────────────────────────
 DEV_MODE=false
 LIDAR_MODE=false
 NAV_MODE=false
+RVIZ_MODE=false
 MAP_FILE=""
 REMAINING_ARGS=()
 
@@ -100,6 +123,7 @@ while [[ $# -gt 0 ]]; do
         --dev)   DEV_MODE=true;  shift ;;
         --lidar) LIDAR_MODE=true; shift ;;
         --nav)   NAV_MODE=true;  shift ;;
+        --rviz)  RVIZ_MODE=true;  shift ;;
         --map)   MAP_FILE="$2";  shift 2 ;;
         *)       REMAINING_ARGS+=("$1"); shift ;;
     esac
@@ -120,12 +144,16 @@ if [[ "$NAV_MODE" == "true" ]]; then
 elif [[ "$LIDAR_MODE" == "true" ]]; then
     PROFILES="${PROFILES:+$PROFILES,}lidar"
 fi
+if [[ "$RVIZ_MODE" == "true" ]]; then
+    PROFILES="${PROFILES:+$PROFILES,}rviz"
+fi
 
 if [[ -n "$PROFILES" ]]; then
     export COMPOSE_PROFILES="$PROFILES"
     echo "Profiles: COMPOSE_PROFILES=$COMPOSE_PROFILES"
 else
-    unset COMPOSE_PROFILES
+    # Set to empty rather than unset — 'unset' causes 'unbound variable' under set -u
+    export COMPOSE_PROFILES=""
 fi
 
 # Export map path for navigation container
@@ -152,7 +180,7 @@ echo "Starting ecza-robotu rover stack..."
 #   • Updated config files (bind-mounted) are picked up immediately
 #   • NAV_MODE / MAP env var changes take effect
 #   • The 10s startup delay in the container command resets cleanly
-if [[ "$NAV_MODE" != "false" ]] && [[ -n "$COMPOSE_PROFILES" ]]; then
+if [[ -n "$PROFILES" ]]; then
     exec docker compose $COMPOSE_FILES up --force-recreate "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 else
     exec docker compose $COMPOSE_FILES up "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"

@@ -18,6 +18,8 @@ setup(
     entry_points={
         "console_scripts": [
             f"kinematics_node = {package_name}.kinematics_node:main",
+            f"mecanum_translator_node = {package_name}.mecanum_translator_node:main",
+            f"encoder_verifier_node = {package_name}.encoder_verifier_node:main",
         ],
     },
 )

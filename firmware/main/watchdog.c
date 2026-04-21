@@ -12,10 +12,14 @@
 
 static const char *TAG = "watchdog";
 
+#define MIN_WDG_TIMEOUT_MS 200u
+#define MAX_WDG_TIMEOUT_MS 10000u
+
 volatile WatchdogState g_watchdog_state = WDG_STATE_TIMED_OUT;
 
 static TimerHandle_t s_timer     = NULL;
 static TaskHandle_t  s_wdg_task  = NULL;
+static StaticTimer_t s_timer_buf;
 
 /* Dedicated watchdog expiry task — has its own stack so that motor_stop_all()
  * and ESP_LOGW do not execute inside the tiny Tmr Svc stack (≈2 KiB).      */
@@ -40,19 +44,31 @@ static void timer_cb(TimerHandle_t xTimer)
 
 void watchdog_init(uint32_t timeout_ms)
 {
+    if (timeout_ms < MIN_WDG_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "watchdog timeout too low (%lu) -> %lu ms",
+                 (unsigned long)timeout_ms, (unsigned long)MIN_WDG_TIMEOUT_MS);
+        timeout_ms = MIN_WDG_TIMEOUT_MS;
+    } else if (timeout_ms > MAX_WDG_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "watchdog timeout too high (%lu) -> %lu ms",
+                 (unsigned long)timeout_ms, (unsigned long)MAX_WDG_TIMEOUT_MS);
+        timeout_ms = MAX_WDG_TIMEOUT_MS;
+    }
+
     /* Spawn the expiry task first so timer_cb can reference s_wdg_task safely */
     xTaskCreate(wdg_expire_task, "wdg_expire", 4096, NULL,
                 configMAX_PRIORITIES - 2, &s_wdg_task);
 
-    s_timer = xTimerCreate(
+    s_timer = xTimerCreateStatic(
         "wdg_timer",
         pdMS_TO_TICKS(timeout_ms),
         pdFALSE,           /* auto-reload = false; reset manually on each cmd */
         NULL,
-        timer_cb);
+        timer_cb,
+        &s_timer_buf);
 
     if (!s_timer) {
-        ESP_LOGE(TAG, "xTimerCreate failed — watchdog not active");
+        ESP_LOGE(TAG, "xTimerCreateStatic failed — fallback to ACTIVE state");
+        g_watchdog_state = WDG_STATE_ACTIVE;
         return;
     }
 
@@ -64,8 +80,10 @@ void watchdog_init(uint32_t timeout_ms)
 
 void watchdog_reset(void)
 {
-    if (!s_timer) return;
     g_watchdog_state = WDG_STATE_ACTIVE;
+
+    if (!s_timer) return;
+
     /* Reset the timer from any task context (xTimerResetFromISR if needed) */
     if (xPortInIsrContext()) {
         BaseType_t woken = pdFALSE;

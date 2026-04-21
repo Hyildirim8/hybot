@@ -54,6 +54,9 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             "robot_description": robot_description_content,
             "use_sim_time": use_sim_time,
+            # Publish fixed links on /tf instead of /tf_static for robust
+            # cross-container visibility in the Docker host-network setup.
+            "use_tf_static": False,
         }],
     )
 

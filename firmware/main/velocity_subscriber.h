@@ -27,13 +27,21 @@ extern volatile uint32_t g_malformed_msg_count;
 extern volatile float g_commanded_speeds[4];
 
 /**
+ * velocity_subscriber_pid_init() — Initialise PID controllers for all 4 wheels.
+ *
+ * Reads gains from Kconfig (CONFIG_PID_KP/KI/KD/INTEGRAL_MAX, ÷1000 scaled).
+ * Must be called once at boot, before the micro-ROS spin loop.
+ */
+void velocity_subscriber_pid_init(void);
+
+/**
  * velocity_subscriber_init() — Create the /wheel_velocities subscriber and
  * register its callback with the executor.
  *
  * @param node      Initialised rcl_node_t.
  * @param executor  Executor to register the subscription callback with.
  */
-void velocity_subscriber_init(rcl_node_t *node, rclc_executor_t *executor);
+bool velocity_subscriber_init(rcl_node_t *node, rclc_executor_t *executor);
 
 /**
  * velocity_subscriber_fini() — Destroy subscriber resources.

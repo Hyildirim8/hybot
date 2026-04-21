@@ -36,7 +36,12 @@ import time
 
 JOINT_NAMES = ["fl_wheel_joint", "fr_wheel_joint", "rl_wheel_joint", "rr_wheel_joint"]
 
-# Seconds without real ESP32 data before falling back to command loopback
+# Per-wheel direction correction from interactive single-wheel testimony:
+# slot0->FL was inverted, slot1->FR correct, slot2->RL inverted, slot3->RR correct.
+# Apply to both command and state so control/odometry remain consistent.
+WHEEL_DIR_SIGN = [-1.0, 1.0, -1.0, 1.0]
+
+# Seconds without real ESP32 data before state is considered stale
 ESP32_TIMEOUT = 1.0
 
 # Keep sending last command to ESP32 to avoid stutter on brief upstream gaps
@@ -47,6 +52,11 @@ CMD_HOLD_TIMEOUT = 0.4
 # keeping USB CDC-ACM / XRCE load low.  RELIABLE QoS depth=1 guarantees each
 # message is delivered without accumulating a retransmit backlog.
 CMD_PUB_RATE_HZ = 25.0
+
+# Clamp small per-wheel commands produced by kinematics/controller noise.
+# This preserves intended pure diagonal/arc patterns by forcing near-zero
+# wheel commands to exactly zero before they reach firmware.
+CMD_DEADBAND_RAD_S = 0.45
 
 # QoS to match topic_based_ros2_control (RELIABLE) and ESP32 micro-ROS (BEST_EFFORT)
 reliable_qos = QoSProfile(
@@ -71,6 +81,17 @@ cmd_qos = QoSProfile(
 class WheelBridge(Node):
     def __init__(self):
         super().__init__("wheel_bridge")
+
+        # Hardware mode default: do not synthesize wheel state from commands.
+        # This keeps RViz/odometry aligned with real encoder feedback.
+        self.declare_parameter("loopback_without_esp32", False)
+        self.declare_parameter("command_deadband_rad_s", CMD_DEADBAND_RAD_S)
+        self._loopback_without_esp32 = bool(
+            self.get_parameter("loopback_without_esp32").value
+        )
+        self._command_deadband = float(
+            self.get_parameter("command_deadband_rad_s").value
+        )
 
         # Timestamp of last real ESP32 state message (for loopback fallback)
         self._last_esp32_time: float = 0.0
@@ -120,18 +141,34 @@ class WheelBridge(Node):
 
     def _on_cmd(self, msg: JointState) -> None:
         """Store latest JointState velocity command; the timer tick sends it.
-        Also echo commands back as state feedback when ESP32 is not connected,
-        so odometry and RViz show robot movement even without real hardware.
+        Optional loopback mode can echo commands as synthetic state when
+        ESP32 feedback is absent (disabled by default for real hardware sync).
         """
         vel_map = dict(zip(msg.name, msg.velocity)) if msg.velocity else {}
         velocities = [float(vel_map.get(name, 0.0)) for name in JOINT_NAMES]
+
+        velocities = [
+            velocities[i] * WHEEL_DIR_SIGN[i]
+            for i in range(4)
+        ]
+
+        # Reject low-amplitude leakage so intended zero-wheel commands remain zero.
+        if self._command_deadband > 0.0:
+            velocities = [
+                0.0 if abs(v) < self._command_deadband else v
+                for v in velocities
+            ]
+
         self._last_cmd = velocities
         self._last_cmd_time = time.monotonic()
         # Do NOT publish here — the 10 Hz timer tick is the sole sender so the
         # USB CDC / XRCE pipe never gets burst-flooded by upstream control rate.
 
-        # Loopback: publish commands as fake state when ESP32 is absent
-        if time.monotonic() - self._last_esp32_time > ESP32_TIMEOUT:
+        # Optional loopback: only for bench/sim diagnostics.
+        if (
+            self._loopback_without_esp32
+            and time.monotonic() - self._last_esp32_time > ESP32_TIMEOUT
+        ):
             self._state_pub.publish(self._make_joint_state(velocities))
 
     def _publish_f32(self, velocities: list[float]) -> None:
@@ -154,6 +191,10 @@ class WheelBridge(Node):
         self._last_esp32_time = time.monotonic()
         data = list(msg.data) if msg.data else []
         data = (data + [0.0] * 4)[:4]
+        data = [
+            data[i] * WHEEL_DIR_SIGN[i]
+            for i in range(4)
+        ]
         self._state_pub.publish(self._make_joint_state(data))
 
 

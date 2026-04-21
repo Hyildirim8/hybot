@@ -1,14 +1,18 @@
 /**
  * app_main.c — Rover firmware entry point
  *
- * Boot sequence (FR-010, US2-AC3):
- *   1. Drive all motor GPIO LOW immediately (safe default before LEDC init)
- *   2. Enable TWDT at 2000 ms (hardware safety net)
- *   3. Load configuration from NVS
- *   4. Initialise motor LEDC channels
- *   5. Initialise software watchdog (starts in TIMED_OUT state)
- *   6. Init micro-ROS node over USB serial, subscriber, status reporter
- *   7. Spin executor; on session loss → stop motors → retry
+ * Boot sequence (R-006, FR-010):
+ *   1.  motor_init / motor_stop_all — safe state immediately
+ *   1b. encoder_init  — PCNT + GPTimer configured (pre-TWDT)
+ *   2.  TWDT configure (2000 ms, trigger_panic)
+ *   3.  nvs_config_load — rover tuning params
+ *   3a. calibration_params_load — dir_sign/speed_scale from NVS (009)
+ *   3b. encoder_start — PCNT counting + GPTimer alarm active
+ *   3c. calibration trigger check → calibration_run if asserted (009)
+ *   4.  watchdog_init — software watchdog (starts TIMED_OUT)
+ *   5.  uros_transport_hw_init — TinyUSB one-time install
+ *   6.  [retry loop] uros_init → velocity_subscriber / status_reporter /
+ *       wheel_publisher / executor spin → on loss → teardown → retry
  *
  * WiFi is no longer used. The ESP32-S3 native USB port (CDC-ACM) carries
  * the micro-ROS XRCE session directly to the host via /dev/ttyACM*.
@@ -16,6 +20,9 @@
 
 #include "nvs_config.h"
 #include "motor.h"
+#include "encoder.h"        /* 008: quadrature encoder feedback */
+#include "wheel_publisher.h" /* 008: /wheel_velocities publisher */
+#include "calibration.h"    /* 009: encoder auto-calibration */
 #include "watchdog.h"
 #include "uros_transport.h"
 #include "velocity_subscriber.h"
@@ -28,18 +35,23 @@
 
 static const char *TAG = "app_main";
 
-/* Spin timeout: 50 ms — drain the USB CDC RX buffer frequently so XRCE frames
- * are not delayed behind a 100 ms poll boundary.  TWDT is fed each iteration
- * (2000 ms limit) so the tighter loop is safe.                              */
-#define SPIN_TIMEOUT_NS    (50ULL * 1000000ULL)    /* 50 ms in nanoseconds */
+/* Spin timeout: 15 ms — enables 50 Hz timer resolution so the wheel_publisher
+ * (008) and encoder GPTimer at 20 ms sample rate are serviced on time.
+ * TWDT is fed each iteration (2000 ms limit) so the tighter loop is safe.   */
+#define SPIN_TIMEOUT_NS    (15ULL * 1000000ULL)    /* 15 ms in nanoseconds */
 #define RECONNECT_DELAY_MS 2000
 
 void app_main(void)
 {
-    /* ── 1. SAFE STATE: stop all motors immediately on every reset ─────── */
+    /* ── 1. SAFE STATE: stop all motors immediately on every reset ─────────── */
     /* motor_init() drives all LEDC channels to 0; GPIO starts low on reset  */
     motor_init();
     motor_stop_all();
+
+    /* ── 1b. Encoder hardware init (one-time, before retry loop) ─────────── */
+    /* encoder_init/start must happen here so g_encoder_velocities[] is always
+     * populated regardless of micro-ROS session state (FR-009).             */
+    encoder_init();
 
     /* ── 2. TWDT: hardware-level watchdog (FR-010) ─────────────────────── */
     /* TWDT may already be initialized by IDF if CONFIG_ESP_TASK_WDT_INIT=y;
@@ -51,9 +63,36 @@ void app_main(void)
     };
     ESP_ERROR_CHECK(esp_task_wdt_reconfigure(&twdt_cfg));
 
-    /* ── 3. Load NVS configuration ──────────────────────────────────────── */
+    /* ── 3. Load NVS configuration ──────────────────────────────────── */
     RoverConfig cfg;
     nvs_config_load(&cfg);
+
+    /* ── 3a. Load calibration parameters from NVS (009) ─────────────── */
+    /* Must happen AFTER nvs_config_load (NVS already initialised) and
+     * BEFORE encoder_start so dir_sign[] is valid at first ISR tick.        */
+    calibration_params_load();
+
+    /* ── 3b. Start encoder PCNT counting (after calibration load) ──────── */
+    /* encoder_init() was called above (pre-TWDT). Start counting now after
+     * calibration params are loaded so direction signs are applied correctly. */
+    encoder_start();
+
+    /* ── 3b2. Initialise PID controllers (010) ─────────────────────────── */
+    /* Must happen after encoder_start() so encoder feedback is active.
+     * Reads gains from Kconfig (CONFIG_PID_KP/KI/KD/INTEGRAL_MAX).          */
+    velocity_subscriber_pid_init();
+
+    /* ── 3c. Boot-time calibration check (009) ────────────────────────── */
+    /* Keep startup deterministic: run auto-calibration only when explicitly
+     * requested via CONFIG_CALIBRATE_ON_BOOT + missing NVS keys. */
+    bool run_boot_calibration = false;
+#ifdef CONFIG_CALIBRATE_ON_BOOT
+    run_boot_calibration = cal_nvs_keys_absent();
+#endif
+    if (run_boot_calibration) {
+        ESP_LOGI(TAG, "boot: calibration triggered");
+        calibration_run();
+    }
 
     /* ── 4. Software watchdog (FR-005) — starts in TIMED_OUT state ─────── */
     watchdog_init(cfg.watchdog_timeout_ms);
@@ -78,9 +117,17 @@ void app_main(void)
             continue;
         }
 
-        /* Register subscriber and status publisher with the executor */
-        velocity_subscriber_init(&node, &executor);
-        status_reporter_init(&node, &support, &executor);
+        /* Register subscriber and publishers with the executor.
+         * If any entity fails to create, tear down and retry cleanly. */
+        if (!velocity_subscriber_init(&node, &executor) ||
+            !status_reporter_init(&node, &support, &executor) ||
+            !wheel_publisher_init(&node, &support, &executor)) {
+            ESP_LOGE(TAG, "entity init failed — reconnect in %d ms", RECONNECT_DELAY_MS);
+            uros_fini(&node, &support);
+            watchdog_expire_cb();
+            vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+            continue;
+        }
 
         /* Subscribe main task to TWDT only now — blocking init phase is done.
          * Only delete first if already subscribed (avoids 'task not found').*/
@@ -110,6 +157,7 @@ void app_main(void)
         /* Tear down and retry */
         watchdog_expire_cb();
         esp_task_wdt_delete(NULL);          /* unsubscribe before blocking reconnect */
+        wheel_publisher_fini(&node);        /* 008 */
         status_reporter_fini(&node);
         velocity_subscriber_fini(&node);
         uros_fini(&node, &support);

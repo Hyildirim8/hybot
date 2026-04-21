@@ -19,6 +19,7 @@ dist/
 
 # ── ESP-IDF firmware build ────────────────────────────────────────────────────
 firmware/build/
+firmware/build_docker/
 firmware/sdkconfig
 firmware/dependencies.lock
 firmware/managed_components/
@@ -36,5 +37,9 @@ Thumbs.db
 .idea/
 
 # ── Secrets / local overrides ────────────────────────────────────────────────
+.env
+.env.*
 .env.local
 *.secret
+*.log
+*.tmp

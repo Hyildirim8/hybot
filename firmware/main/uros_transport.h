@@ -23,7 +23,7 @@
 
 /** Node name and namespace — must match FR-011 */
 #define UROS_NODE_NAME      "esp32_firmware_node"
-#define UROS_NAMESPACE      "rover"
+#define UROS_NAMESPACE      "/rover"
 
 /**
  * uros_init() — Set up USB serial transport, allocator, support, node, and executor.

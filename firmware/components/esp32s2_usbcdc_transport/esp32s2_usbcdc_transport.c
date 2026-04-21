@@ -1,6 +1,9 @@
 #include "esp32s2_usbcdc_transport.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "esp_log.h"
+
+static const char *CDC_TAG = "cdc_transport";
 
 /* Set to true after tinyusb_driver_install() succeeds once. */
 static bool s_tusb_installed = false;
@@ -45,8 +48,17 @@ bool esp32s2_usbcdc_open(struct uxrCustomTransport* transport) {
         .callback_line_coding_changed = NULL
     };
 
-    if (tusb_cdc_acm_init(&acm_cfg) != ESP_OK) {
-        return false;
+    esp_err_t init_ret = tusb_cdc_acm_init(&acm_cfg);
+    if (init_ret != ESP_OK) {
+        if (init_ret == ESP_ERR_INVALID_STATE || tusb_cdc_acm_initialized(*cdc_port)) {
+            /* Already initialized — this can happen when rmw_uros_ping_agent
+             * opened and then re-closed the transport, or on reconnect when
+             * close was not called before open. Treat as success.          */
+            ESP_LOGD(CDC_TAG, "CDC already initialized — skipping re-init");
+        } else {
+            ESP_LOGE(CDC_TAG, "tusb_cdc_acm_init failed: %s", esp_err_to_name(init_ret));
+            return false;
+        }
     }
 
     /* Wait for the host to open the CDC port (DTR asserted) before returning.
@@ -63,12 +75,16 @@ bool esp32s2_usbcdc_open(struct uxrCustomTransport* transport) {
     return true;
 }
 
-// Close USB-CDC — deinit CDCACM only; TinyUSB driver stays installed.
+// Close USB-CDC — flush pending TX only; keep CDC-ACM initialized so the
+// next open() can proceed without re-init. Deinit/reinit of CDC-ACM is
+// fragile because rmw_init.c calls CLOSE_TRANSPORT on session-creation
+// failure, which races against the next open() call.
 bool esp32s2_usbcdc_close(struct uxrCustomTransport* transport) {
     tinyusb_cdcacm_itf_t* cdc_port = (tinyusb_cdcacm_itf_t*)transport->args;
-    esp_err_t ret = tusb_cdc_acm_deinit(*cdc_port);
-    /* ESP_ERR_INVALID_STATE means it was already deinitialized — that's fine */
-    return (ret == ESP_OK || ret == ESP_ERR_INVALID_STATE);
+    /* Flush any pending output — ignore errors since we're closing anyway */
+    tinyusb_cdcacm_write_flush(*cdc_port, 0);
+    /* Do NOT call tusb_cdc_acm_deinit — CDC stays alive for the next open() */
+    return true;
 }
 
 // Write to USB-CDC

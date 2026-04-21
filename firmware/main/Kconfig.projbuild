@@ -45,3 +45,167 @@ menu "Rover Motor GPIO Configuration"
         range 0 48
 
 endmenu
+
+menu "Rover Encoder Configuration"
+
+    config ENCODER_CPR
+        int "Counts per revolution (CPR)"
+        default 1980
+        range 1 65536
+        help
+            Encoder pulses per output shaft revolution: 11 lines × 4 (quadrature)
+            × 45 (gear ratio) = 1980. Verify at bring-up via encoder_counts[i].
+
+    config ENCODER_NOISE_FLOOR
+        int "Noise floor (ticks)"
+        default 2
+        range 0 100
+        help
+            Delta-count below this threshold is treated as zero velocity.
+            Suppresses sub-2-tick jitter from PWM EMI.
+
+    config ENCODER_SAMPLE_PERIOD_MS
+        int "Velocity sample period (ms)"
+        default 20
+        range 5 1000
+        help
+            GPTimer alarm period; must match the controller_manager update_rate
+            (50 Hz = 20 ms). Changing this requires a full firmware rebuild.
+
+    config ENCODER_GLITCH_NS
+        int "PCNT glitch filter (nanoseconds)"
+        default 1000
+        range 0 1000000
+        help
+            PCNT hardware glitch filter. Pulses shorter than this are ignored.
+            1000 ns suppresses sub-1µs noise from motor PWM switching.
+
+    config ENCODER_FL_PIN_A
+        int "Front-Left encoder pin A"
+        default 8
+        range 0 48
+
+    config ENCODER_FL_PIN_B
+        int "Front-Left encoder pin B"
+        default 9
+        range 0 48
+
+    config ENCODER_FR_PIN_A
+        int "Front-Right encoder pin A"
+        default 10
+        range 0 48
+
+    config ENCODER_FR_PIN_B
+        int "Front-Right encoder pin B"
+        default 11
+        range 0 48
+
+    config ENCODER_RL_PIN_A
+        int "Rear-Left encoder pin A"
+        default 12
+        range 0 48
+
+    config ENCODER_RL_PIN_B
+        int "Rear-Left encoder pin B"
+        default 13
+        range 0 48
+
+    config ENCODER_RR_PIN_A
+        int "Rear-Right encoder pin A"
+        default 14
+        range 0 48
+
+    config ENCODER_RR_PIN_B
+        int "Rear-Right encoder pin B"
+        default 21
+        range 0 48
+
+endmenu
+
+menu "Rover Calibration"
+
+    config CALIBRATE_ON_BOOT
+        bool "Run calibration on any boot where NVS keys are absent"
+        default n
+        help
+            When enabled, calibration_run() is executed automatically if NVS
+            calibration keys are not found (e.g. first boot or after NVS erase).
+            Equivalent to holding GPIO CONFIG_CAL_TRIGGER_GPIO LOW at boot.
+
+    config CAL_TRIGGER_GPIO
+        int "Calibration trigger GPIO (active-low)"
+        default 22
+        range 0 48
+        help
+            Hold this pin LOW at boot to trigger calibration_run().
+            GPIO 22 is the only free safe GPIO on this PCB revision.
+            Internal pull-up is enabled; leave floating (or tie HIGH) for normal boot.
+
+    config CAL_BURST_MS
+        int "Motor burst duration per measurement (ms)"
+        default 500
+        range 100 5000
+        help
+            How long each motor burst runs before sampling velocity.
+            350 ms is 5× the mechanical time constant of the GB37-520.
+            Default 500 ms provides extra settling margin.
+
+    config CAL_DUTY_LOW_PCT
+        int "Low-speed calibration duty cycle (%)"
+        default 30
+        range 10 90
+        help
+            First speed point for two-point speed profiling (US2).
+            Must be well above stall torque (~20%). Default 30%.
+
+    config CAL_DUTY_HIGH_PCT
+        int "High-speed calibration duty cycle (%)"
+        default 70
+        range 10 90
+        help
+            Second speed point for two-point speed profiling (US2).
+            Must be less than 100% to avoid saturation. Default 70%.
+
+endmenu
+
+menu "Rover PID Motor Control"
+
+    config PID_KP
+        int "Proportional gain (×1000)"
+        default 50
+        range 0 10000
+        help
+            Proportional gain for the per-wheel PID velocity controller.
+            Value is divided by 1000 at runtime (e.g. 50 → Kp = 0.050).
+            Increase for faster response; decrease if motors oscillate.
+
+    config PID_KI
+        int "Integral gain (×1000)"
+        default 100
+        range 0 10000
+        help
+            Integral gain for the per-wheel PID velocity controller.
+            Value is divided by 1000 at runtime (e.g. 100 → Ki = 0.100).
+            Eliminates steady-state speed error. Increase slowly;
+            too much causes overshoot and windup.
+
+    config PID_KD
+        int "Derivative gain (×1000)"
+        default 5
+        range 0 10000
+        help
+            Derivative gain for the per-wheel PID velocity controller.
+            Value is divided by 1000 at runtime (e.g. 5 → Kd = 0.005).
+            Dampens overshoot. Usually much smaller than Kp and Ki.
+
+    config PID_INTEGRAL_MAX
+        int "Integral anti-windup limit (×1000)"
+        default 500
+        range 10 5000
+        help
+            Maximum |integral| accumulation for anti-windup.
+            Value is divided by 1000 at runtime (e.g. 500 → 0.500).
+            Prevents the integral term from growing unbounded when the
+            motor cannot reach the target speed (e.g. stall or high load).
+
+endmenu

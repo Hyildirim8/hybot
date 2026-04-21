@@ -6313,6 +6313,240 @@
     {
         "children": [
             {
+                "children": [],
+                "depends_on": null,
+                "help": "Encoder pulses per output shaft revolution: 11 lines \u00d7 4 (quadrature)\n\u00d7 45 (gear ratio) = 1980. Verify at bring-up via encoder_counts[i].",
+                "id": "ENCODER_CPR",
+                "name": "ENCODER_CPR",
+                "range": [
+                    1,
+                    65536
+                ],
+                "title": "Counts per revolution (CPR)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "Delta-count below this threshold is treated as zero velocity.\nSuppresses sub-2-tick jitter from PWM EMI.",
+                "id": "ENCODER_NOISE_FLOOR",
+                "name": "ENCODER_NOISE_FLOOR",
+                "range": [
+                    0,
+                    100
+                ],
+                "title": "Noise floor (ticks)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "GPTimer alarm period; must match the controller_manager update_rate\n(50 Hz = 20 ms). Changing this requires a full firmware rebuild.",
+                "id": "ENCODER_SAMPLE_PERIOD_MS",
+                "name": "ENCODER_SAMPLE_PERIOD_MS",
+                "range": [
+                    5,
+                    1000
+                ],
+                "title": "Velocity sample period (ms)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "PCNT hardware glitch filter. Pulses shorter than this are ignored.\n1000 ns suppresses sub-1\u00b5s noise from motor PWM switching.",
+                "id": "ENCODER_GLITCH_NS",
+                "name": "ENCODER_GLITCH_NS",
+                "range": [
+                    0,
+                    1000000
+                ],
+                "title": "PCNT glitch filter (nanoseconds)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_FL_PIN_A",
+                "name": "ENCODER_FL_PIN_A",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Front-Left encoder pin A",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_FL_PIN_B",
+                "name": "ENCODER_FL_PIN_B",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Front-Left encoder pin B",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_FR_PIN_A",
+                "name": "ENCODER_FR_PIN_A",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Front-Right encoder pin A",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_FR_PIN_B",
+                "name": "ENCODER_FR_PIN_B",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Front-Right encoder pin B",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_RL_PIN_A",
+                "name": "ENCODER_RL_PIN_A",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Rear-Left encoder pin A",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_RL_PIN_B",
+                "name": "ENCODER_RL_PIN_B",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Rear-Left encoder pin B",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_RR_PIN_A",
+                "name": "ENCODER_RR_PIN_A",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Rear-Right encoder pin A",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": null,
+                "id": "ENCODER_RR_PIN_B",
+                "name": "ENCODER_RR_PIN_B",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Rear-Right encoder pin B",
+                "type": "int"
+            }
+        ],
+        "depends_on": null,
+        "id": "rover-encoder-configuration",
+        "title": "Rover Encoder Configuration",
+        "type": "menu"
+    },
+    {
+        "children": [
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "When enabled, calibration_run() is executed automatically if NVS\ncalibration keys are not found (e.g. first boot or after NVS erase).\nEquivalent to holding GPIO CONFIG_CAL_TRIGGER_GPIO LOW at boot.",
+                "id": "CALIBRATE_ON_BOOT",
+                "name": "CALIBRATE_ON_BOOT",
+                "range": null,
+                "title": "Run calibration on any boot where NVS keys are absent",
+                "type": "bool"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "Hold this pin LOW at boot to trigger calibration_run().\nGPIO 22 is the only free safe GPIO on this PCB revision.\nInternal pull-up is enabled; leave floating (or tie HIGH) for normal boot.",
+                "id": "CAL_TRIGGER_GPIO",
+                "name": "CAL_TRIGGER_GPIO",
+                "range": [
+                    0,
+                    48
+                ],
+                "title": "Calibration trigger GPIO (active-low)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "How long each motor burst runs before sampling velocity.\n350 ms is 5\u00d7 the mechanical time constant of the GB37-520.\nDefault 500 ms provides extra settling margin.",
+                "id": "CAL_BURST_MS",
+                "name": "CAL_BURST_MS",
+                "range": [
+                    100,
+                    5000
+                ],
+                "title": "Motor burst duration per measurement (ms)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "First speed point for two-point speed profiling (US2).\nMust be well above stall torque (~20%). Default 30%.",
+                "id": "CAL_DUTY_LOW_PCT",
+                "name": "CAL_DUTY_LOW_PCT",
+                "range": [
+                    10,
+                    90
+                ],
+                "title": "Low-speed calibration duty cycle (%)",
+                "type": "int"
+            },
+            {
+                "children": [],
+                "depends_on": null,
+                "help": "Second speed point for two-point speed profiling (US2).\nMust be less than 100% to avoid saturation. Default 70%.",
+                "id": "CAL_DUTY_HIGH_PCT",
+                "name": "CAL_DUTY_HIGH_PCT",
+                "range": [
+                    10,
+                    90
+                ],
+                "title": "High-speed calibration duty cycle (%)",
+                "type": "int"
+            }
+        ],
+        "depends_on": null,
+        "id": "rover-calibration",
+        "title": "Rover Calibration",
+        "type": "menu"
+    },
+    {
+        "children": [
+            {
                 "children": [
                     {
                         "children": [],

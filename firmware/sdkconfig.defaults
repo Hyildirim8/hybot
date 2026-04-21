@@ -1,3 +1,4 @@
+CONFIG_FREERTOS_FPU_IN_ISR=y
 # firmware/sdkconfig.defaults — build-time defaults for rover firmware
 #
 # These values are applied on first `idf.py build` (or after `idf.py fullclean`).

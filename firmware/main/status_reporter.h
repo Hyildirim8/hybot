@@ -36,6 +36,18 @@ typedef struct {
     bool     motor_faults[4];
     uint64_t uptime_ms;
     uint32_t malformed_msg_count;
+    /* 008: encoder feedback fields */
+    int32_t  encoder_counts[4];
+    int32_t  encoder_last_delta[4];
+    uint32_t encoder_sample_seq;
+    float    encoder_velocities[4];
+    bool     encoder_faults[4];
+    /* 009: calibration fields */
+    int8_t   cal_direction[4];
+    float    cal_speed_scale[4];
+    /* 010: PID closed-loop diagnostics */
+    float    pid_errors[4];
+    float    pid_outputs[4];
 } FirmwareStatus;
 
 /**
@@ -56,7 +68,7 @@ int status_serialize(const FirmwareStatus *s, char *buf, size_t len);
  * @param node      Initialised rcl_node_t.
  * @param executor  Executor (rcl_timer handle added here; capacity must be ≥3).
  */
-void status_reporter_init(rcl_node_t *node, rclc_support_t *support, rclc_executor_t *executor);
+bool status_reporter_init(rcl_node_t *node, rclc_support_t *support, rclc_executor_t *executor);
 
 /**
  * status_reporter_fini() — Destroy publisher resources.

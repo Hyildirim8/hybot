@@ -46,12 +46,13 @@ services:
   # subsystem access (joy_linux uses /dev/input/js*, not SDL event* — R-004).
   joy:
     <<: *ros-service
+    user: root
     privileged: true                    # needed for /dev/input/* access
     volumes:
       - /dev/input:/dev/input           # joystick device hot-plug
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
     command: >
-      ros2 run joy_linux joy_linux_node
+      ros2 run joy joy_node
       --ros-args
       -p dev:=/dev/input/js0
       -p autorepeat_rate:=50.0
@@ -94,22 +95,10 @@ services:
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - /dev:/dev
-    entrypoint:
-      - /bin/bash
-      - -c
-      - |
-        # Wait for the ESP32 CDC device to appear
-        until [ -e /dev/ttyESP32 ]; do
-          echo "Waiting for /dev/ttyESP32..."
-          sleep 1
-        done
-        # Open in blocking mode to assert CDC DTR; fd 3 stays open throughout
-        exec 3<>/dev/ttyESP32
-        stty -F /dev/ttyESP32 115200 raw -hupcl 2>/dev/null || true
-        exec /micro-ros_entrypoint.sh \
-          serial --dev /dev/ttyESP32 --baudrate 115200 --verbose 4
+    command: >
+      serial --dev ${SERIAL_DEV:-/dev/ttyACM0} --baudrate 115200 --verbose 6
     healthcheck:
-      test: ["CMD", "test", "-e", "/dev/ttyESP32"]
+      test: ["CMD-SHELL", "test -e ${SERIAL_DEV:-/dev/ttyACM0}"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -155,6 +144,8 @@ services:
       DISPLAY: ":0"
       XAUTHORITY: /tmp/.host_Xauthority
       QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
       WAYLAND_DISPLAY: wayland-0
       XDG_RUNTIME_DIR: /run/user/1000
     volumes:

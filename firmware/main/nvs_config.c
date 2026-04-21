@@ -15,6 +15,8 @@ static const char *TAG = "nvs_config";
 /* Compile-time defaults (used when NVS key is absent) */
 #define DEFAULT_MAX_SPEED       10.0f
 #define DEFAULT_WDG_TIMEOUT_MS  1000u
+#define MIN_WDG_TIMEOUT_MS      200u
+#define MAX_WDG_TIMEOUT_MS      10000u
 
 /* ─── Internal helpers ──────────────────────────────────────────────────── */
 
@@ -62,6 +64,20 @@ void nvs_config_load(RoverConfig *cfg)
     uint32_t wdg;
     if (nvs_get_u32(h, NVS_KEY_WDG_TIMEOUT, &wdg) == ESP_OK)
         cfg->watchdog_timeout_ms = wdg;
+
+    /* Guard against stale/corrupt NVS values that can make the watchdog
+     * expire between valid command frames and keep motors permanently stopped. */
+    if (cfg->watchdog_timeout_ms < MIN_WDG_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "wdg_timeout_ms too low (%lu) -> clamped to %lu",
+                 (unsigned long)cfg->watchdog_timeout_ms,
+                 (unsigned long)MIN_WDG_TIMEOUT_MS);
+        cfg->watchdog_timeout_ms = MIN_WDG_TIMEOUT_MS;
+    } else if (cfg->watchdog_timeout_ms > MAX_WDG_TIMEOUT_MS) {
+        ESP_LOGW(TAG, "wdg_timeout_ms too high (%lu) -> clamped to %lu",
+                 (unsigned long)cfg->watchdog_timeout_ms,
+                 (unsigned long)MAX_WDG_TIMEOUT_MS);
+        cfg->watchdog_timeout_ms = MAX_WDG_TIMEOUT_MS;
+    }
 
     nvs_close(h);
     ESP_LOGI(TAG, "config: maxspd=%.1f wdg=%lums (USB serial transport)",

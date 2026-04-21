@@ -6,7 +6,8 @@ Reads sensor_msgs/Joy and publishes geometry_msgs/Twist on /cmd_vel.
 Modes
 -----
   TELEOP (default) — joystick drives the robot via /cmd_vel.
-  AUTO             — joystick output is muted; Nav2 owns /cmd_vel.
+    AUTO             — joystick output is muted; Nav2 /cmd_vel is forwarded
+                                         to the controller command output.
                      Press btn_auto_mode again to return to TELEOP.
 
 On TELEOP → AUTO:  publishes zero Twist so the robot stops before Nav2 takes over.
@@ -19,12 +20,15 @@ The current mode is broadcast on /autonomous_mode (std_msgs/Bool, latched)
 Parameters (from rover_params.yaml):
   axis_linear_x         (int, default 1)    — stick axis for forward/backward
   axis_linear_y         (int, default 0)    — stick axis for left/right strafe
-  axis_angular_z        (int, default 3)    — stick axis for yaw rotation
+    axis_angular_z        (int, default 2)    — stick axis for yaw rotation
   enable_button         (int, default 5)    — dead-man button (R1)
   require_enable_button (bool, default false)
   btn_strafe_left       (int, default 6)    — full-speed strafe left  (LT)
   btn_strafe_right      (int, default 7)    — full-speed strafe right (RT)
   btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
+    btn_auto_mode_alt     (int, default -1)   — optional alternate toggle button
+    nav_cmd_topic         (str, default /cmd_vel_nav) — Nav2 command topic in AUTO mode
+    start_in_autonomous   (bool, default true) — startup in AUTO so first Start enables joystick
   max_linear_speed      (float, default 1.5) m/s
   max_angular_speed     (float, default 3.0) rad/s
   joy_deadzone          (float, default 0.05)
@@ -32,6 +36,7 @@ Parameters (from rover_params.yaml):
 """
 
 import math
+import time
 
 import rclpy
 from rclpy.node import Node
@@ -48,12 +53,17 @@ class TeleopNode(Node):
         # ── Parameters ────────────────────────────────────────────────────
         self.declare_parameter("axis_linear_x", 1)
         self.declare_parameter("axis_linear_y", 0)
-        self.declare_parameter("axis_angular_z", 3)
+        self.declare_parameter("axis_angular_z", 2)
         self.declare_parameter("enable_button", 5)
+        self.declare_parameter("enable_button_alt", -1)
         self.declare_parameter("require_enable_button", True)
         self.declare_parameter("btn_strafe_left", 6)
         self.declare_parameter("btn_strafe_right", 7)
         self.declare_parameter("btn_auto_mode", 9)   # Start button
+        self.declare_parameter("btn_auto_mode_alt", -1)
+        self.declare_parameter("auto_toggle_debounce_ms", 400)  # minimum interval between mode toggles
+        self.declare_parameter("nav_cmd_topic", "/cmd_vel_nav")
+        self.declare_parameter("start_in_autonomous", True)
         self.declare_parameter("max_linear_speed", 0.5)
         self.declare_parameter("max_angular_speed", 1.0)
         self.declare_parameter("joy_deadzone", 0.05)
@@ -63,18 +73,24 @@ class TeleopNode(Node):
         self._ax_ly = self.get_parameter("axis_linear_y").value
         self._ax_az = self.get_parameter("axis_angular_z").value
         self._btn_en = self.get_parameter("enable_button").value
+        self._btn_en_alt = self.get_parameter("enable_button_alt").value
         self._require_en = self.get_parameter("require_enable_button").value
         self._btn_sl = self.get_parameter("btn_strafe_left").value
         self._btn_sr = self.get_parameter("btn_strafe_right").value
         self._btn_auto = self.get_parameter("btn_auto_mode").value
+        self._btn_auto_alt = self.get_parameter("btn_auto_mode_alt").value
+        self._auto_toggle_debounce_ms = int(self.get_parameter("auto_toggle_debounce_ms").value)
+        self._nav_cmd_topic = self.get_parameter("nav_cmd_topic").value
+        self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
         self._max_ang = self.get_parameter("max_angular_speed").value
         self._deadzone = self.get_parameter("joy_deadzone").value
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
         # ── Autonomous mode state ─────────────────────────────────────────
-        self._autonomous = False          # False = TELEOP, True = AUTO
-        self._prev_auto_btn = False       # edge-detect: avoid holding-button repeat
+        self._autonomous = bool(self._start_in_autonomous)  # False = TELEOP, True = AUTO
+        self._prev_auto_btn = False       # edge-detect across primary/alt buttons
+        self._last_mode_toggle_time = 0.0
 
         # ── Publishers / Subscribers ──────────────────────────────────────
         # Use BEST_EFFORT QoS to match mecanum_drive_controller's subscription
@@ -96,6 +112,10 @@ class TeleopNode(Node):
         self._mode_pub = self.create_publisher(Bool, "autonomous_mode", latched_qos)
 
         self._joy_sub = self.create_subscription(Joy, "joy", self._joy_cb, 10)
+        # Match Nav2/controller cmd_vel reliability in containerized deployments.
+        self._nav_sub = self.create_subscription(
+            Twist, self._nav_cmd_topic, self._nav_cmd_cb, best_effort_qos
+        )
 
         # Publish initial mode (TELEOP) immediately so late subscribers see it.
         self._publish_mode()
@@ -109,8 +129,11 @@ class TeleopNode(Node):
         self.get_logger().info(
             f"teleop_node ready — axes lx={self._ax_lx} ly={self._ax_ly} "
             f"az={self._ax_az}, enable_btn={self._btn_en}, "
+            f"enable_btn_alt={self._btn_en_alt}, "
             f"strafe_left_btn={self._btn_sl}, strafe_right_btn={self._btn_sr}, "
-            f"auto_mode_btn={self._btn_auto}, require_enable={self._require_en}"
+            f"auto_mode_btn={self._btn_auto}, auto_mode_btn_alt={self._btn_auto_alt}, "
+            f"nav_cmd_topic={self._nav_cmd_topic}, start_in_autonomous={self._start_in_autonomous}, "
+            f"require_enable={self._require_en}"
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -134,12 +157,15 @@ class TeleopNode(Node):
         self._last_joy = self.get_clock().now()
 
         # ── Autonomous mode toggle (edge-detect to avoid repeat on hold) ──
-        auto_btn_now = (
-            self._btn_auto < len(msg.buttons)
-            and bool(msg.buttons[self._btn_auto])
-        )
-        if auto_btn_now and not self._prev_auto_btn:
+        # Toggle mode only on explicitly configured button indices.
+        auto_btn_primary = self._btn_auto >= 0 and self._btn_auto < len(msg.buttons) and bool(msg.buttons[self._btn_auto])
+        auto_btn_alt = self._btn_auto_alt >= 0 and self._btn_auto_alt < len(msg.buttons) and bool(msg.buttons[self._btn_auto_alt])
+        auto_btn_now = auto_btn_primary or auto_btn_alt
+        now_s = time.monotonic()
+        debounce_s = max(0.0, float(self._auto_toggle_debounce_ms) / 1000.0)
+        if auto_btn_now and not self._prev_auto_btn and (now_s - self._last_mode_toggle_time) >= debounce_s:
             self._autonomous = not self._autonomous
+            self._last_mode_toggle_time = now_s
             self._publish_mode()
             # Always stop the robot on any transition so neither Nav2 nor
             # the joystick leaves the wheels spinning during the handoff.
@@ -155,7 +181,9 @@ class TeleopNode(Node):
         # Dead-man switch check
         enabled = True
         if self._require_en:
-            if self._btn_en >= len(msg.buttons) or not msg.buttons[self._btn_en]:
+            primary = self._btn_en < len(msg.buttons) and bool(msg.buttons[self._btn_en])
+            alt = self._btn_en_alt >= 0 and self._btn_en_alt < len(msg.buttons) and bool(msg.buttons[self._btn_en_alt])
+            if not (primary or alt):
                 enabled = False
 
         if not enabled:
@@ -174,21 +202,20 @@ class TeleopNode(Node):
         vx = axis(self._ax_lx) * self._max_lin
 
         # ── Strafe: stick axis PLUS dedicated buttons (additive, clamped) ─
-        # Left stick X: pushing right = axis +1 = robot strafe right = vy -1
-        # Button LT(6) → strafe left:  FL+ FR- RL- RR+  (vy = -max_lin)
-        # Button RT(7) → strafe right: FL- FR+ RL+ RR-  (vy = +max_lin)
-        # NOTE: vy sign is negated vs naive ROS +y=left convention because the
-        # mecanum_drive_controller uses the opposite vy sign internally for this
-        # rover's roller orientation.
+        # ROS base_link convention (REP-103): +Y = left, -Y = right.
+        # Strafe direction is intentionally inverted here to match the rover's
+        # observed hardware convention for left/right motion.
+        # Button LT(6) → strafe left
+        # Button RT(7) → strafe right
         vy_stick = axis(self._ax_ly) * self._max_lin
         vy_btn = 0.0
         if btn(self._btn_sl):
-            vy_btn -= self._max_lin   # strafe left:  FL+ FR- RL- RR+
+            vy_btn -= self._max_lin
         if btn(self._btn_sr):
-            vy_btn += self._max_lin   # strafe right: FL- FR+ RL+ RR-
+            vy_btn += self._max_lin
         vy = max(-self._max_lin, min(self._max_lin, vy_stick + vy_btn))
 
-        # ── Rotation: right stick Y — push up = CCW (+wz) ─────────────
+        # ── Rotation: right stick X — push left/right = CCW/CW (+/-wz) ─
         wz = axis(self._ax_az) * self._max_ang
 
         twist = Twist()
@@ -197,7 +224,16 @@ class TeleopNode(Node):
         twist.angular.z = wz
         self._cmd_pub.publish(twist)
 
+    def _nav_cmd_cb(self, msg: Twist) -> None:
+        # Forward Nav2 velocity commands only while in AUTO mode.
+        if self._autonomous:
+            self._cmd_pub.publish(msg)
+
     def _watchdog_cb(self) -> None:
+        # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the
+        # joy watchdog must not inject zero commands.
+        if self._autonomous:
+            return
         elapsed = (self.get_clock().now() - self._last_joy).nanoseconds * 1e-9
         timeout = self.get_parameter("joy_watchdog_timeout_ms").value / 1000.0
         if elapsed > timeout:

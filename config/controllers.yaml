@@ -61,7 +61,7 @@ mecanum_drive_controller:
     odom_frame_id: odom
     base_frame_id: base_link
     enable_odom_tf: true
-    open_loop: true            # true = command without waiting for encoder feedback
+    open_loop: false           # false = use wheel feedback for odometry/synchronization
 
     # ── cmd_vel input ─────────────────────────────────────────────────────────
     # use_stamped_vel: false  → accept geometry_msgs/Twist (not TwistStamped)

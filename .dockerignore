@@ -56,5 +56,7 @@ Thumbs.db
 
 # ── Firmware build artefacts (separate build system) ────────────────────────
 firmware/build/
+firmware/build_docker/
 firmware/sdkconfig
 firmware/dependencies.lock
+firmware/managed_components/
