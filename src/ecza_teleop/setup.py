@@ -18,6 +18,7 @@ setup(
     entry_points={
         "console_scripts": [
             f"teleop_node = {package_name}.teleop_node:main",
+            f"slam_manager_node = {package_name}.slam_manager_node:main",
         ],
     },
 )
