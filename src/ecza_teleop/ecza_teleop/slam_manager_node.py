@@ -285,14 +285,18 @@ class SlamManagerNode(Node):
 
         # En açık sektör: en büyük minimum mesafeye sahip sektör.
         # Sensörü gelmeyen sektör (açık alan) react_distance ile puanlanır.
+        # İleri yön önyargısı: eşit puanlı sektörlerde orta (düz) sektörü tercih et.
+        # Bu açık alanda tüm sektörler eşit olduğunda sol/sağ sallanmayı önler.
         if n_sectors > 0:
             best_idx = 0
             best_score = -1.0
             sector_width = 2.0 * lookahead / n_sectors
+            center_idx = n_sectors // 2
             for i in range(n_sectors):
                 score = sector_min[i] if sector_min[i] != math.inf else self._direct_react_distance
-                if score > best_score:
-                    best_score = score
+                fwd_bias = 0.10 * max(0.0, 1.0 - abs(i - center_idx) / max(1, center_idx))
+                if score + fwd_bias > best_score:
+                    best_score = score + fwd_bias
                     best_idx = i
             self._best_open_angle = -lookahead + (best_idx + 0.5) * sector_width
         else:
@@ -555,7 +559,11 @@ class SlamManagerNode(Node):
         try:
             result = future.result()
             status = getattr(result, "status", 0)
-            if status != 4:  # 4 = STATUS_SUCCEEDED
+            if status == 4:  # STATUS_SUCCEEDED
+                # Başarıyla tamamlandı; sonraki frontier bulunana kadar hareket et.
+                # _explore_tick bir sonraki çevrimde yeni hedef gönderir (explore_interval_s).
+                self._enable_direct_explore("frontier tamamlandı, sonraki bekleniyor")
+            else:
                 self._blacklist_active_goal()
                 self._enable_direct_explore("Nav2 hedefi tamamlanmadı")
         except Exception:
@@ -599,7 +607,7 @@ class SlamManagerNode(Node):
 
         # ── P-kontrolcü: açı yumuşatma + orantılı dönüş ─────────────────────
         # Düşük geçişli filtre: ani açı sıçramalarını söndür (sallanma önleme).
-        self._smooth_angle = 0.50 * self._best_open_angle + 0.50 * self._smooth_angle
+        self._smooth_angle = 0.65 * self._best_open_angle + 0.35 * self._smooth_angle
         error = self._smooth_angle
         p_turn = max(-self._direct_turn_speed,
                      min(self._direct_turn_speed, self._direct_kp * error))
@@ -656,8 +664,7 @@ class SlamManagerNode(Node):
             )
         else:
             # ── Normal sürüş: sürekli hız profili (stutter yok) ──────────────
-            # Hız eşiği geçişinde anlık düşüş yerine lineer rampa kullan.
-            # stop_distance'ta tam hız; escape_distance'a doğru 0'a iner.
+            # stop_distance'ta tam hız; escape_distance'a doğru lineer sıfırlanır.
             front_dist = self._front_obstacle_distance
             if front_dist >= self._direct_stop_distance:
                 fwd_scale = 1.0
@@ -669,6 +676,12 @@ class SlamManagerNode(Node):
                 fwd_scale = 0.0
             cmd.linear.x = self._direct_speed * cos_scale * fwd_scale
             cmd.angular.z = p_turn
+            # Mecanum yan hizalama: koridor ortasında tut, yan duvara sürtmeyi önle.
+            # sol_boşluk < sağ_boşluk → sağa kay (y<0), tersi → sola kay (y>0).
+            if self._side_left_clearance < 0.55 or self._side_right_clearance < 0.55:
+                side_err = self._side_left_clearance - self._side_right_clearance
+                cmd.linear.y = max(-self._direct_strafe_speed,
+                                   min(self._direct_strafe_speed, 0.8 * side_err))
 
         # Exponential smoothing — her tick'te anlık hız yerine yumuşak geçiş.
         # Keskin dönüşleri ortadan kaldırır; PID ramp davranışını simüle eder.
