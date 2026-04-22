@@ -79,6 +79,7 @@ class TeleopNode(Node):
         self.declare_parameter("front_obstacle_stop_distance", 0.45)
         self.declare_parameter("front_obstacle_clear_distance", 0.75)
         self.declare_parameter("front_obstacle_angle_deg", 35.0)
+        self.declare_parameter("auto_emergency_stop_distance", 0.30)
         self.declare_parameter("avoidance_turn_speed", 0.8)
         self.declare_parameter("avoidance_strafe_speed", 0.25)
         self.declare_parameter("lidar_angle_offset_deg", 0.0)
@@ -118,6 +119,9 @@ class TeleopNode(Node):
         )
         self._front_angle_rad = math.radians(
             float(self.get_parameter("front_obstacle_angle_deg").value)
+        )
+        self._auto_emergency_stop_dist = float(
+            self.get_parameter("auto_emergency_stop_distance").value
         )
         self._avoidance_turn_speed = float(
             self.get_parameter("avoidance_turn_speed").value
@@ -290,33 +294,37 @@ class TeleopNode(Node):
         self._right_clearance = right_clearance
 
     def _apply_scan_safety(self, twist: Twist) -> Twist:
-        if not self._enable_scan_safety or twist.linear.x <= 0.0:
+        if not self._enable_scan_safety:
             return twist
 
-        if self._autonomous and not self._enable_scan_safety_in_auto:
+        if self._autonomous:
+            # Auto mode: emergency stop only — triggers at a much closer threshold
+            # than teleop so Nav2 can plan around obstacles at longer range.
+            # Only fires when a dynamic obstacle (e.g. person) is very close.
+            if twist.linear.x > 0.0 and self._front_obstacle_distance <= self._auto_emergency_stop_dist:
+                safe = Twist()
+                safe.linear.x = 0.0
+                safe.linear.y = twist.linear.y
+                safe.angular.z = twist.angular.z
+                self.get_logger().warn(
+                    f"AUTO acil durum dur: önde {self._front_obstacle_distance:.2f}m "
+                    f"(insan/dinamik engel)",
+                    throttle_duration_sec=1.0,
+                )
+                return safe
             return twist
 
-        if not self._front_blocked:
+        # Teleop mode: normal scan safety with configured threshold.
+        if twist.linear.x <= 0.0 or not self._front_blocked:
             return twist
 
         safe = Twist()
         safe.linear.x = 0.0
         safe.linear.y = twist.linear.y
         safe.angular.z = twist.angular.z
-
-        if self._autonomous:
-            turn_left = self._left_clearance >= self._right_clearance
-            side_clearance = self._left_clearance if turn_left else self._right_clearance
-            direction = 1.0 if turn_left else -1.0
-
-            safe.angular.z = direction * self._avoidance_turn_speed
-            if side_clearance >= self._front_clear_distance:
-                safe.linear.y = direction * self._avoidance_strafe_speed
-
         self.get_logger().warn(
-            f"front obstacle at {self._front_obstacle_distance:.2f}m; "
-            f"{'avoiding' if self._autonomous else 'blocking forward command'} "
-            f"(left={self._left_clearance:.2f}m right={self._right_clearance:.2f}m)",
+            f"Ön engel {self._front_obstacle_distance:.2f}m; ileri engellendi "
+            f"(sol={self._left_clearance:.2f}m sağ={self._right_clearance:.2f}m)",
             throttle_duration_sec=1.0,
         )
         return safe

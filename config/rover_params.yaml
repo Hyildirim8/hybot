@@ -53,7 +53,8 @@
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
-    enable_scan_safety_in_auto: false # Nav2 handles its own obstacle avoidance via DWB costmap
+    enable_scan_safety_in_auto: false # Nav2 handles avoidance; emergency stop below overrides
+    auto_emergency_stop_distance: 0.30 # AUTO modda acil dur: önde <30cm (insan/dinamik engel)
     scan_topic: "/scan"
     front_obstacle_stop_distance: 0.45 # stop if obstacle within 45 cm directly ahead
     front_obstacle_clear_distance: 0.65
@@ -76,10 +77,13 @@
     explore_interval_s: 3.0        # saniye — frontier güncelleme periyodu
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
-    direct_explore_speed: 0.45
+    direct_explore_speed: 0.70
     direct_explore_turn_speed: 1.00
     direct_explore_backup_speed: 0.35
     direct_explore_strafe_speed: 0.30
+    direct_explore_kp: 1.8           # P-kontrolcü kazancı (rad/s per rad error)
+    direct_explore_lookahead_deg: 100.0  # açık yön arama açısı (±50°) — koridorda yan duvarı görmez
+    direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
     min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
     direct_explore_stop_distance: 0.45 # stop if obstacle within 45 cm in front cone
     direct_explore_escape_distance: 0.35
