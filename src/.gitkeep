@@ -1,0 +1,10 @@
+# src/ — ROS2 workspace source packages
+#
+# ROS2 packages (ecza_teleop, ecza_kinematics, etc.) will be placed here as
+# features 001–005 are implemented.
+#
+# The Dockerfile COPY src/ src/ requires at least one file so the layer is
+# not a no-op. This placeholder serves that purpose and documents the intent.
+#
+# rosdep install --from-paths src will skip this directory because it contains
+# no package.xml files (--ignore-src handles missing packages gracefully).

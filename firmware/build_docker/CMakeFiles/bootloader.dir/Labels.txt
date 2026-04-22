@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/work/build_docker/CMakeFiles/bootloader
+/work/build_docker/CMakeFiles/bootloader.rule
+/work/build_docker/CMakeFiles/bootloader-complete.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/work/build_docker/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

@@ -1,0 +1,98 @@
+# rover_params.yaml — Single runtime configuration for the ecza-robotu stack.
+#
+# Mounted read-only into all service containers at /config/rover_params.yaml.
+# Edit this file and restart the stack (no image rebuild needed).
+#
+# IMPORTANT: All keys use ros__parameters (double underscore).
+# Missing required keys cause the affected node to log ERROR and exit.
+#
+# Canonical source of truth: specs/006-docker-runtime/contracts/compose-schema.md §2
+
+/**:
+  ros__parameters:
+
+    # ── Rover geometry ────────────────────────────────────────────────────────
+    # All values must be positive non-zero floats.
+    # NOTE: wheel_radius, wheel_base, wheel_separation_width are also set in
+    #       config/controllers.yaml for mecanum_drive_controller — keep in sync.
+    wheel_separation_width: 0.26   # metres — left/right wheel centre distance
+    wheel_base: 0.38               # metres — front/rear axle centre distance
+    wheel_radius: 0.08             # metres — measure physical wheel and update
+
+    # ── Speed limits ──────────────────────────────────────────────────────────
+    max_linear_speed: 1.5          # m/s — maximum translational speed
+    max_angular_speed: 3.0         # rad/s — maximum rotation speed
+
+    # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
+    # Logitech F710 Gamepad — D-mode (switch on back set to D), linux joy driver
+    # Axes (6 total):
+    #   0 = left  stick X   (left=-1, right=+1)
+    #   1 = left  stick Y   (up=+1,   down=-1)  ← forward/backward
+    #   2 = right stick X   (left=-1, right=+1)  ← rotation
+    #   3 = right stick Y   (up=+1,   down=-1)
+    #   4 = D-pad X         (left=-1, right=+1)
+    #   5 = D-pad Y         (up=+1,   down=-1)
+    # Buttons (12 total):
+    #   0=X   1=A   2=B   3=Y
+    #   4=LB  5=RB  6=LT  7=RT
+    #   8=Back  9=Start  10=L3  11=R3
+    joy_deadzone: 0.05             # [0, 1) — smoother low-speed stick response
+    axis_linear_x: 1               # left  stick Y — forward / backward
+    axis_linear_y: 0               # left  stick X — right stick motion maps to right strafe (vy < 0)
+    axis_angular_z: 2              # right stick X — rotate CCW / CW
+    enable_button: 5               # RB — dead-man switch
+    enable_button_alt: 4           # LB — alternate dead-man for mode compatibility
+    require_enable_button: true    # safety: drive only while RB/LB dead-man is held
+    btn_strafe_left: 6             # LT — instant full-speed strafe left  (vy > 0)
+    btn_strafe_right: 7            # RT — instant full-speed strafe right (vy < 0)
+    btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
+    btn_auto_mode_alt: 8           # Back — alternate toggle if Start is not mapped as expected
+    btn_auto_mode_candidates: [9, 8] # accept either Start or Back for TELEOP <-> AUTO
+    auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
+    nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
+    start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
+    autorepeat_rate: 30.0          # Hz — smoother teleop command stream
+    enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
+    enable_scan_safety_in_auto: false # Nav2 handles its own obstacle avoidance via DWB costmap
+    scan_topic: "/scan"
+    front_obstacle_stop_distance: 0.45 # stop if obstacle within 45 cm directly ahead
+    front_obstacle_clear_distance: 0.65
+    front_obstacle_angle_deg: 45.0    # only check a narrow ±22.5° cone ahead, not side walls
+    avoidance_turn_speed: 0.35
+    avoidance_strafe_speed: 0.25
+
+    # ── slam_manager (SLAM + otonom keşif) ───────────────────────────────────
+    # Buttons (12 total):
+    #   0=X  1=A  2=B  3=Y  4=LB  5=RB  6=LT  7=RT  8=Back  9=Start  10=L3  11=R3
+    btn_save_map: 3                # Y — mevcut SLAM haritasını /maps/ dizinine kaydet
+    btn_explore_toggle: 1          # A — otonom frontier keşfini aç/kapat
+    btn_debounce_ms: 150           # buton sıçramasını önle
+    map_save_dir: "/maps"          # kayıt dizini (navigation container'daki bağlama)
+    frontier_min_cells: 8          # küçük frontier kümelerini görmezden gel
+    frontier_obstacle_padding_m: 0.35 # engel yakınındaki frontier hedeflerini ele
+    failed_goal_blacklist_radius_m: 0.45 # başarısız hedefe tekrar tekrar gitme
+    max_failed_goals: 20
+    goal_timeout_s: 45.0           # saniye — hedef tamamlanmadan önce max bekleme
+    explore_interval_s: 3.0        # saniye — frontier güncelleme periyodu
+    direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
+    lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
+    direct_explore_speed: 0.45
+    direct_explore_turn_speed: 1.00
+    direct_explore_backup_speed: 0.35
+    direct_explore_strafe_speed: 0.30
+    min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
+    direct_explore_stop_distance: 0.45 # stop if obstacle within 45 cm in front cone
+    direct_explore_escape_distance: 0.35
+    direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
+
+    # ── Watchdog timeouts ─────────────────────────────────────────────────────
+    # Two distinct watchdogs — do not conflate them.
+    joy_watchdog_timeout_ms: 500        # ms — avoids false zeroing from brief /joy jitter
+    firmware_watchdog_timeout_ms: 500   # ms — ESP32 stops motors on /wheel_velocities silence
+                                        # (informational here; firmware reads from NVS)
+
+    # ── micro-ROS agent (informational) ──────────────────────────────────────
+    # The actual agent port is set via the AGENT_PORT env var in .env.
+    # Keep this in sync with AGENT_PORT.
+    agent_port: 8888               # UDP port for micro-ROS agent
+    agent_bind_address: "0.0.0.0"  # bind to all interfaces

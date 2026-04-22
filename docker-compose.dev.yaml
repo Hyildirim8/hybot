@@ -1,0 +1,47 @@
+# =============================================================================
+# docker-compose.dev.yaml — Development overrides
+#
+# NOT automatically merged (filename doesn't match docker-compose.override.yaml).
+# Activate with:
+#   bash scripts/launch.sh --dev               # via launch script
+#   docker compose -f docker-compose.yaml -f docker-compose.dev.yaml up
+#
+# Provides development-time conveniences without touching the production
+# docker-compose.yaml:
+#
+#   • Bind-mounts ./src so Python/ROS2 changes are visible without image rebuild
+#   • Increases micro-ros-agent verbosity to level 6 (DEBUG) for development
+#   • Disables restart policies (restart: "no") so containers stop cleanly
+#     on errors during dev — prevents confusing restart loops
+#
+# For production (systemd / power-on auto-start) use:
+#   docker compose -f docker-compose.yaml up -d
+# or simply:
+#   bash scripts/launch.sh -d
+# =============================================================================
+
+services:
+
+  # Bind-mount local source tree so the build stage picks up changes.
+  # Override target to build stage for live source inspection.
+  joy:
+    build:
+      target: runtime
+    restart: "no"
+
+  teleop:
+    restart: "no"
+
+  robot_description:
+    restart: "no"
+
+  # Raise agent verbosity to DEBUG in dev environments.
+  # Override serial device if needed: SERIAL_DEV=/dev/ttyACM1
+  micro-ros-agent:
+    environment:
+      VERBOSE: "6"
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    restart: "no"
+
+  diagnostics:
+    restart: "no"
