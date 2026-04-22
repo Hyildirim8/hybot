@@ -221,7 +221,7 @@
       y=0 : centred left-right
       z   : top of chassis + 15 mm standoff + 30 mm to laser plane
     -->
-    <origin xyz="0.0 0.0 ${chassis_z + ch2 + 0.045}" rpy="0 0 0"/>
+    <origin xyz="0.0 0.0 ${chassis_z + ch2 + 0.045}" rpy="0 0 3.14159"/>
   </joint>
 
   <!-- ── ros2_control — topic_based hardware interface ─────────────────── -->
