@@ -53,10 +53,12 @@ class SlamManagerNode(Node):
         self.declare_parameter("max_failed_goals", 20)
         self.declare_parameter("goal_timeout_s", 45.0)     # hedefe max bekleme
         self.declare_parameter("explore_interval_s", 3.0)  # frontier güncelleme periyodu
+        self.declare_parameter("lidar_angle_offset_deg", 0.0)
         self.declare_parameter("direct_explore_fallback", True)
         self.declare_parameter("direct_explore_speed", 0.18)
         self.declare_parameter("direct_explore_turn_speed", 0.45)
         self.declare_parameter("direct_explore_backup_speed", 0.12)
+        self.declare_parameter("direct_explore_strafe_speed", 0.30)
         self.declare_parameter("direct_explore_stop_distance", 0.55)
         self.declare_parameter("direct_explore_escape_distance", 0.35)
         self.declare_parameter("direct_explore_front_angle_deg", 45.0)
@@ -85,6 +87,9 @@ class SlamManagerNode(Node):
         self._direct_backup_speed = float(
             self.get_parameter("direct_explore_backup_speed").value
         )
+        self._direct_strafe_speed = float(
+            self.get_parameter("direct_explore_strafe_speed").value
+        )
         self._direct_stop_distance = float(
             self.get_parameter("direct_explore_stop_distance").value
         )
@@ -93,6 +98,9 @@ class SlamManagerNode(Node):
         )
         self._direct_front_angle_rad = math.radians(
             float(self.get_parameter("direct_explore_front_angle_deg").value)
+        )
+        self._lidar_angle_offset_rad = math.radians(
+            float(self.get_parameter("lidar_angle_offset_deg").value)
         )
 
         # ── Durum ─────────────────────────────────────────────────────────────
@@ -198,14 +206,22 @@ class SlamManagerNode(Node):
                 continue
             angle = msg.angle_min + (i * msg.angle_increment)
             angle = math.atan2(math.sin(angle), math.cos(angle))
-            if abs(angle) <= half_angle:
+
+            # Apply lidar mounting offset: sensor may be rotated relative to base_link.
+            # lidar_angle_offset_deg=180 means sensor faces backward — subtract π so
+            # that sensor angle ±π maps to robot front (angle 0 in shifted frame).
+            shifted = math.atan2(
+                math.sin(angle - self._lidar_angle_offset_rad),
+                math.cos(angle - self._lidar_angle_offset_rad),
+            )
+            if abs(shifted) <= half_angle:
                 front = min(front, float(distance))
 
-            # Turn away from the closest front-side return. This intentionally
-            # overlaps the front cone so angled walls influence the escape side.
-            if 0.0 <= angle <= math.radians(120.0):
+            # Left/right clearance sectors use shifted angle so they are in robot frame.
+            # positive shifted angle = robot left (+Y), negative = robot right (-Y).
+            if 0.0 <= shifted <= math.radians(120.0):
                 left = min(left, float(distance))
-            elif -math.radians(120.0) <= angle < 0.0:
+            elif -math.radians(120.0) <= shifted < 0.0:
                 right = min(right, float(distance))
 
         self._front_obstacle_distance = front
@@ -498,21 +514,29 @@ class SlamManagerNode(Node):
             return
 
         cmd = Twist()
+        # Turn and strafe toward the side with more clearance.
+        # Positive angular.z = CCW = robot left; positive linear.y = robot left.
         turn_left = self._left_clearance >= self._right_clearance
-        turn = self._direct_turn_speed if turn_left else -self._direct_turn_speed
+        sign = 1.0 if turn_left else -1.0
 
         if self._front_obstacle_distance <= self._direct_escape_distance:
+            # Very close: back up hard + strafe + turn — use full mecanum capability.
             cmd.linear.x = -self._direct_backup_speed
-            cmd.angular.z = turn
+            cmd.linear.y = sign * self._direct_strafe_speed
+            cmd.angular.z = sign * self._direct_turn_speed
             self.get_logger().warn(
-                f"Duvar çok yakın ({self._front_obstacle_distance:.2f}m); geri kaçış manevrası",
+                f"Duvar çok yakın ({self._front_obstacle_distance:.2f}m); "
+                f"geri+yan kaçış (sol={self._left_clearance:.2f}m sağ={self._right_clearance:.2f}m)",
                 throttle_duration_sec=1.0,
             )
         elif self._front_obstacle_distance <= self._direct_stop_distance:
-            cmd.linear.x = -0.5 * self._direct_backup_speed
-            cmd.angular.z = turn
+            # Medium distance: strafe sideways + turn without backing up.
+            # Strafing lets mecanum slide away from the wall without losing ground.
+            cmd.linear.x = 0.0
+            cmd.linear.y = sign * self._direct_strafe_speed
+            cmd.angular.z = sign * self._direct_turn_speed
             self.get_logger().warn(
-                f"Ön engel ({self._front_obstacle_distance:.2f}m); geri dönerek kaçış",
+                f"Ön engel ({self._front_obstacle_distance:.2f}m); yan kaçış manevrası",
                 throttle_duration_sec=1.0,
             )
         else:

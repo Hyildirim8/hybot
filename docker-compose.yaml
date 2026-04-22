@@ -111,7 +111,11 @@ services:
   # joint_state_broadcaster via topic_based_ros2_control hardware interface.
   robot_description:
     <<: *ros-service
-    volumes: *config-mount
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/controllers.yaml:/config/controllers.yaml:ro
+      - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
     command: >
       ros2 launch ecza_description hardware.launch.py
     restart: unless-stopped
@@ -158,6 +162,7 @@ services:
       - /home/master/.Xauthority:/tmp/.host_Xauthority:ro
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
     command:
       - bash
       - -c

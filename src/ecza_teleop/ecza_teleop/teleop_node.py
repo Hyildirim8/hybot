@@ -81,6 +81,7 @@ class TeleopNode(Node):
         self.declare_parameter("front_obstacle_angle_deg", 35.0)
         self.declare_parameter("avoidance_turn_speed", 0.8)
         self.declare_parameter("avoidance_strafe_speed", 0.25)
+        self.declare_parameter("lidar_angle_offset_deg", 0.0)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -123,6 +124,9 @@ class TeleopNode(Node):
         )
         self._avoidance_strafe_speed = float(
             self.get_parameter("avoidance_strafe_speed").value
+        )
+        self._lidar_angle_offset_rad = math.radians(
+            float(self.get_parameter("lidar_angle_offset_deg").value)
         )
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
@@ -262,16 +266,22 @@ class TeleopNode(Node):
 
             angle = msg.angle_min + (i * msg.angle_increment)
             angle = math.atan2(math.sin(angle), math.cos(angle))
-            abs_angle = abs(angle)
-            if abs_angle <= half_angle:
+
+            # Apply lidar mounting offset: sensor may be rotated relative to base_link.
+            # lidar_angle_offset_deg=180 means sensor faces backward — subtract π so
+            # that sensor angle ±π maps to robot front (angle 0 in shifted frame).
+            shifted = math.atan2(
+                math.sin(angle - self._lidar_angle_offset_rad),
+                math.cos(angle - self._lidar_angle_offset_rad),
+            )
+            if abs(shifted) <= half_angle:
                 min_distance = min(min_distance, float(distance))
 
-            # Use front-side sectors for the escape direction. With a wide
-            # front cone, side-only sectors can be empty while an angled wall is
-            # still inside the front cone.
-            if 0.0 <= angle <= math.radians(110.0):
+            # Left/right clearance sectors use shifted angle so they are in robot frame.
+            # positive shifted angle = robot left (+Y), negative = robot right (-Y).
+            if 0.0 <= shifted <= math.radians(110.0):
                 left_clearance = min(left_clearance, float(distance))
-            elif -math.radians(110.0) <= angle < 0.0:
+            elif -math.radians(110.0) <= shifted < 0.0:
                 right_clearance = min(right_clearance, float(distance))
 
         self._front_obstacle_distance = min_distance
