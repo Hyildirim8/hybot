@@ -216,10 +216,8 @@ services:
       - ./maps:/maps:rw
       - ./src/ecza_teleop/ecza_teleop/slam_manager_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py:ro
     command:
-      - ros2
-      - run
-      - ecza_teleop
-      - slam_manager_node
+      - python3
+      - /ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py
       - --ros-args
       - --params-file
       - /config/rover_params.yaml
@@ -285,6 +283,7 @@ services:
       # Bind-mount güncel config dosyaları — image rebuild gerektirmeden aktif olur
       - ./src/ecza_navigation/config/nav2_params.yaml:/ws/install/share/ecza_navigation/config/nav2_params.yaml:ro
       - ./src/ecza_navigation/config/slam_params.yaml:/ws/install/share/ecza_navigation/config/slam_params.yaml:ro
+      - ./src/ecza_navigation/config/navigate_through_poses_no_recovery.xml:/ws/install/share/ecza_navigation/config/navigate_through_poses_no_recovery.xml:ro
       - ./src/ecza_navigation/launch/nav2_navigation.launch.py:/ws/install/share/ecza_navigation/launch/nav2_navigation.launch.py:ro
     command:
       - bash
