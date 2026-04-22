@@ -1,0 +1,110 @@
+# rover_params.yaml.example — Operator reference copy with detailed inline comments.
+#
+# Copy this file to rover_params.yaml and fill in hardware-specific values.
+# This file is the source of truth for all tuneable runtime parameters.
+#
+# Quick-start checklist before first hardware run:
+#   1. Measure wheel_radius on the physical rover and update below.
+#   2. Confirm AGENT_PORT matches the ESP32 firmware NVS provisioning.
+#   3. Confirm WiFi: host PC and ESP32 on same subnet.
+#   4. Set max_linear_speed conservatively (0.3 m/s) for first tests.
+
+/**:
+  ros__parameters:
+
+    # ────────────────────────────────────────────────────────────────────────
+    # ROVER GEOMETRY
+    # ────────────────────────────────────────────────────────────────────────
+    # These values must match the physical rover dimensions exactly.
+    # Incorrect values produce systematic drift and incorrect motion patterns.
+
+    wheel_separation_width: 0.26
+    # ^ Centre-to-centre distance between left and right wheels (metres).
+    #   Measured on the front axle. Constitution: 260 mm.
+
+    wheel_base: 0.38
+    # ^ Centre-to-centre distance between front and rear axles (metres).
+    #   Constitution: 380 mm.
+
+    wheel_radius: 0.05
+    # ^ PLACEHOLDER — radius of each mecanum wheel (metres).
+    #   MEASURE THIS on the physical hardware before any motion test.
+    #   Typical GB37-520 wheel radius is 0.048–0.060 m.
+    #   Using the placeholder will cause incorrect wheel velocity computation.
+
+    # ────────────────────────────────────────────────────────────────────────
+    # SPEED LIMITS
+    # ────────────────────────────────────────────────────────────────────────
+    # Start conservatively. Increase after verifying motion patterns on hardware.
+
+    max_linear_speed: 0.5
+    # ^ Maximum translational speed (m/s). Sent as linear.x / linear.y in Twist.
+    #   Recommend 0.3 m/s for first hardware sessions.
+
+    max_angular_speed: 1.0
+    # ^ Maximum rotation speed (rad/s). Sent as angular.z in Twist.
+    #   Recommend 0.5 rad/s for first hardware sessions.
+
+    # ────────────────────────────────────────────────────────────────────────
+    # JOYSTICK — Logitech F710 in D-mode (DirectInput)
+    # ────────────────────────────────────────────────────────────────────────
+    # IMPORTANT: Toggle switch on the F710 MUST be set to D (not X).
+    # X-mode produces different axis indices; these defaults will not work.
+
+    joy_deadzone: 0.05
+    # ^ Axis values with |value| < joy_deadzone are treated as zero.
+    #   Suppresses stick drift. Range [0, 1). Default 0.05.
+
+    axis_linear_x: 1
+    # ^ Joy axis index → Twist.linear.x (forward/backward).
+    #   F710 D-mode: left stick vertical = axis 1.
+    #   Convention: negative = forward (node corrects sign to REP-103 positive=forward).
+
+    axis_linear_y: 0
+    # ^ Joy axis index → Twist.linear.y (strafe left/right).
+    #   F710 D-mode: left stick horizontal = axis 0.
+
+    axis_angular_z: 3
+    # ^ Joy axis index → Twist.angular.z (rotation).
+    #   F710 D-mode: right stick horizontal = axis 3.
+
+    enable_button: 5
+    # ^ Joy button index for the dead-man switch.
+    #   F710 D-mode: Right Bumper (RB) = button 5.
+    #   Hold this button to allow motion commands to be published.
+
+    require_enable_button: true
+    # ^ Set to false to disable the dead-man switch entirely.
+    #   Only do this in a controlled environment — rover will move immediately
+    #   on any stick input without requiring button hold.
+
+    # ────────────────────────────────────────────────────────────────────────
+    # WATCHDOG TIMEOUTS
+    # ────────────────────────────────────────────────────────────────────────
+    # There are two distinct watchdogs. Do not use a single key for both.
+
+    joy_watchdog_timeout_ms: 500
+    # ^ Teleop node watchdog: publishes zero Twist if no /joy message received
+    #   within this window. Protects against joystick disconnect.
+    #   Default 500 ms. Decrease for tighter safety; increase if Joy rate < 2 Hz.
+
+    firmware_watchdog_timeout_ms: 500
+    # ^ ESP32 firmware watchdog: stops all motors if no /wheel_velocities command
+    #   received within this window. INFORMATIONAL in this YAML — the firmware
+    #   reads the actual value from NVS. Document here for operator reference.
+    #   Default 500 ms (4× less than the TWDT of 2000 ms).
+
+    # ────────────────────────────────────────────────────────────────────────
+    # micro-ROS AGENT (informational)
+    # ────────────────────────────────────────────────────────────────────────
+    # The agent UDP port is controlled by the AGENT_PORT env var in .env.
+    # Keep agent_port in sync with AGENT_PORT so validation scripts can check it.
+
+    agent_port: 8888
+    # ^ UDP port the micro-ROS agent listens on.
+    #   Must match the port provisioned into the ESP32 firmware NVS.
+    #   Also set AGENT_PORT=8888 in .env.
+
+    agent_bind_address: "0.0.0.0"
+    # ^ Interface to bind. 0.0.0.0 binds to all interfaces including WiFi.
+    #   Restrict to a specific interface IP if needed for security.

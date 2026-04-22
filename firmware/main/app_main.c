@@ -1,0 +1,169 @@
+/**
+ * app_main.c — Rover firmware entry point
+ *
+ * Boot sequence (R-006, FR-010):
+ *   1.  motor_init / motor_stop_all — safe state immediately
+ *   1b. encoder_init  — PCNT + GPTimer configured (pre-TWDT)
+ *   2.  TWDT configure (2000 ms, trigger_panic)
+ *   3.  nvs_config_load — rover tuning params
+ *   3a. calibration_params_load — dir_sign/speed_scale from NVS (009)
+ *   3b. encoder_start — PCNT counting + GPTimer alarm active
+ *   3c. calibration trigger check → calibration_run if asserted (009)
+ *   4.  watchdog_init — software watchdog (starts TIMED_OUT)
+ *   5.  uros_transport_hw_init — TinyUSB one-time install
+ *   6.  [retry loop] uros_init → velocity_subscriber / status_reporter /
+ *       wheel_publisher / executor spin → on loss → teardown → retry
+ *
+ * WiFi is no longer used. The ESP32-S3 native USB port (CDC-ACM) carries
+ * the micro-ROS XRCE session directly to the host via /dev/ttyACM*.
+ */
+
+#include "nvs_config.h"
+#include "motor.h"
+#include "encoder.h"        /* 008: quadrature encoder feedback */
+#include "wheel_publisher.h" /* 008: /wheel_velocities publisher */
+#include "calibration.h"    /* 009: encoder auto-calibration */
+#include "watchdog.h"
+#include "uros_transport.h"
+#include "velocity_subscriber.h"
+#include "status_reporter.h"
+
+#include "esp_log.h"
+#include "esp_task_wdt.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+static const char *TAG = "app_main";
+
+/* Spin timeout: 15 ms — enables 50 Hz timer resolution so the wheel_publisher
+ * (008) and encoder GPTimer at 20 ms sample rate are serviced on time.
+ * TWDT is fed each iteration (2000 ms limit) so the tighter loop is safe.   */
+#define SPIN_TIMEOUT_NS    (15ULL * 1000000ULL)    /* 15 ms in nanoseconds */
+#define RECONNECT_DELAY_MS 2000
+
+void app_main(void)
+{
+    /* ── 1. SAFE STATE: stop all motors immediately on every reset ─────────── */
+    /* motor_init() drives all LEDC channels to 0; GPIO starts low on reset  */
+    motor_init();
+    motor_stop_all();
+
+    /* ── 1b. Encoder hardware init (one-time, before retry loop) ─────────── */
+    /* encoder_init/start must happen here so g_encoder_velocities[] is always
+     * populated regardless of micro-ROS session state (FR-009).             */
+    encoder_init();
+
+    /* ── 2. TWDT: hardware-level watchdog (FR-010) ─────────────────────── */
+    /* TWDT may already be initialized by IDF if CONFIG_ESP_TASK_WDT_INIT=y;
+     * reconfigure() works regardless of prior state.                         */
+    esp_task_wdt_config_t twdt_cfg = {
+        .timeout_ms     = 2000,
+        .idle_core_mask = 0,   /* don't watch IDLE — main blocks during WiFi */
+        .trigger_panic  = true,
+    };
+    ESP_ERROR_CHECK(esp_task_wdt_reconfigure(&twdt_cfg));
+
+    /* ── 3. Load NVS configuration ──────────────────────────────────── */
+    RoverConfig cfg;
+    nvs_config_load(&cfg);
+
+    /* ── 3a. Load calibration parameters from NVS (009) ─────────────── */
+    /* Must happen AFTER nvs_config_load (NVS already initialised) and
+     * BEFORE encoder_start so dir_sign[] is valid at first ISR tick.        */
+    calibration_params_load();
+
+    /* ── 3b. Start encoder PCNT counting (after calibration load) ──────── */
+    /* encoder_init() was called above (pre-TWDT). Start counting now after
+     * calibration params are loaded so direction signs are applied correctly. */
+    encoder_start();
+
+    /* ── 3b2. Initialise PID controllers (010) ─────────────────────────── */
+    /* Must happen after encoder_start() so encoder feedback is active.
+     * Reads gains from Kconfig (CONFIG_PID_KP/KI/KD/INTEGRAL_MAX).          */
+    velocity_subscriber_pid_init();
+
+    /* ── 3c. Boot-time calibration check (009) ────────────────────────── */
+    /* Keep startup deterministic: run auto-calibration only when explicitly
+     * requested via CONFIG_CALIBRATE_ON_BOOT + missing NVS keys. */
+    bool run_boot_calibration = false;
+#ifdef CONFIG_CALIBRATE_ON_BOOT
+    run_boot_calibration = cal_nvs_keys_absent();
+#endif
+    if (run_boot_calibration) {
+        ESP_LOGI(TAG, "boot: calibration triggered");
+        calibration_run();
+    }
+
+    /* ── 4. Software watchdog (FR-005) — starts in TIMED_OUT state ─────── */
+    watchdog_init(cfg.watchdog_timeout_ms);
+    watchdog_expire_cb();   /* ensure safe default before first command (T020) */
+
+    /* ── 5. One-time TinyUSB driver install (must happen before retry loop) */
+    /* Installing inside the retry loop causes ESP_ERR_INVALID_STATE on the   */
+    /* second attempt, leaving CDC-ACM uninitialized and silently broken.      */
+    uros_transport_hw_init();
+
+    /* ── 6. micro-ROS + executor spin loop with reconnect ──────────────── */
+    while (true) {
+        rcl_node_t      node;
+        rclc_support_t  support;
+        rclc_executor_t executor;
+
+        if (!uros_init(&cfg, &node, &support, &executor)) {
+            ESP_LOGE(TAG, "micro-ROS init failed — retry in %d ms",
+                     RECONNECT_DELAY_MS);
+            watchdog_expire_cb();
+            vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+            continue;
+        }
+
+        /* Register subscriber and publishers with the executor.
+         * If any entity fails to create, tear down and retry cleanly. */
+        if (!velocity_subscriber_init(&node, &executor) ||
+            !status_reporter_init(&node, &support, &executor) ||
+            !wheel_publisher_init(&node, &support, &executor)) {
+            ESP_LOGE(TAG, "entity init failed — reconnect in %d ms", RECONNECT_DELAY_MS);
+            uros_fini(&node, &support);
+            watchdog_expire_cb();
+            vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+            continue;
+        }
+
+        /* Subscribe main task to TWDT only now — blocking init phase is done.
+         * Only delete first if already subscribed (avoids 'task not found').*/
+        if (esp_task_wdt_status(NULL) == ESP_OK) {
+            esp_task_wdt_delete(NULL);
+        }
+        ESP_ERROR_CHECK(esp_task_wdt_add(NULL));
+        esp_task_wdt_reset();
+
+        ESP_LOGI(TAG, "micro-ROS running — entering spin loop");
+
+        /* Spin until session loss */
+        while (true) {
+            bool ok = uros_spin_once(&executor, SPIN_TIMEOUT_NS);
+            esp_task_wdt_reset();   /* feed TWDT each cycle */
+
+            if (!ok) {
+                ESP_LOGW(TAG, "session loss — tearing down and reconnecting");
+                break;
+            }
+
+            /* Software watchdog is reset only in velocity_callback() when a
+             * command actually arrives — not here.  This means motors stop
+             * if commands cease even while the XRCE session stays up.      */
+        }
+
+        /* Tear down and retry */
+        watchdog_expire_cb();
+        esp_task_wdt_delete(NULL);          /* unsubscribe before blocking reconnect */
+        wheel_publisher_fini(&node);        /* 008 */
+        status_reporter_fini(&node);
+        velocity_subscriber_fini(&node);
+        uros_fini(&node, &support);
+
+        /* Simple delay — no TWDT reset here, task is unsubscribed above. */
+        vTaskDelay(pdMS_TO_TICKS(RECONNECT_DELAY_MS));
+    }
+}
+

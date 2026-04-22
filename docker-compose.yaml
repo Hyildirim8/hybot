@@ -1,0 +1,318 @@
+# =============================================================================
+# docker-compose.yaml — ecza-robotu rover stack
+#
+# Usage:
+#   docker compose build              # build ecza-robotu:runtime image
+#   docker compose up                 # start full stack (no recording)
+#   COMPOSE_PROFILES=record \
+#     docker compose up               # start stack + rosbag2 recorder
+#
+# Use scripts/launch.sh for the canonical operator entry point; it handles
+# RECORD=true → COMPOSE_PROFILES=record translation and version validation.
+#
+# All services use network_mode: host so Fast-DDS UDP multicast works across
+# the container boundary without bridge-network packet filtering (research R-002).
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Shared configuration fragments (YAML anchors)
+# ---------------------------------------------------------------------------
+x-ros-service: &ros-service
+  image: ecza-robotu:runtime
+  build:
+    context: .
+    dockerfile: docker/Dockerfile
+    target: runtime
+  network_mode: host
+  user: rosuser
+  restart: unless-stopped
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+
+x-config-mount: &config-mount
+  - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+  - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+  - ./config/controllers.yaml:/config/controllers.yaml:ro
+
+# ---------------------------------------------------------------------------
+# Services
+# ---------------------------------------------------------------------------
+services:
+
+  # ── joy ───────────────────────────────────────────────────────────────────
+  # Publishes raw gamepad data as sensor_msgs/Joy on /joy.
+  # Requires privileged + /dev/input bind-mount for hot-plug kernel joystick
+  # subsystem access (joy_linux uses /dev/input/js*, not SDL event* — R-004).
+  joy:
+    <<: *ros-service
+    user: root
+    privileged: true                    # needed for /dev/input/* access
+    volumes:
+      - /dev/input:/dev/input           # joystick device hot-plug
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+    command: >
+      ros2 run joy joy_node
+      --ros-args
+      -p dev:=/dev/input/js0
+      -p autorepeat_rate:=50.0
+      -p deadzone:=0.05
+    restart: unless-stopped             # auto-retry on replug / permission error
+
+  # ── teleop ────────────────────────────────────────────────────────────────
+  # Converts /joy messages into /cmd_vel Twist messages applying deadzone,
+  # dead-man switch, and speed-limit parameters from rover_params.yaml.
+  teleop:
+    <<: *ros-service
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/controllers.yaml:/config/controllers.yaml:ro
+      - ./src/ecza_teleop/ecza_teleop/teleop_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/teleop_node.py:ro
+    command:
+      - ros2
+      - run
+      - ecza_teleop
+      - teleop_node
+      - --ros-args
+      - --params-file
+      - /config/rover_params.yaml
+    depends_on:
+      - joy
+
+  # ── micro-ros-agent ───────────────────────────────────────────────────────
+  # Bridges the ESP32 micro-ROS client (USB serial / CDC-ACM) into the ROS2 graph.
+  # The ESP32-S3 native USB port appears as /dev/ttyACM0 on the host.
+  # Uses upstream official image — NOT bundled in ecza-robotu:runtime.
+  # Device path controlled via SERIAL_DEV env var (default /dev/ttyACM0).
+  # Baud rate is ignored for CDC-ACM but set for compatibility.
+  micro-ros-agent:
+    image: microros/micro-ros-agent:humble
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - /dev:/dev
+    command: >
+      serial --dev ${SERIAL_DEV:-/dev/ttyACM0} --baudrate 115200 --verbose 6
+    healthcheck:
+      test: ["CMD-SHELL", "test -e ${SERIAL_DEV:-/dev/ttyACM0}"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ── robot_description ───────────────────────────────────────────────────────
+  # Runs robot_state_publisher + ros2_control controller_manager.
+  # controller_manager loads mecanum_drive_controller (IK + odometry) and
+  # joint_state_broadcaster via topic_based_ros2_control hardware interface.
+  robot_description:
+    <<: *ros-service
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/controllers.yaml:/config/controllers.yaml:ro
+      - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
+    command: >
+      ros2 launch ecza_description hardware.launch.py
+    restart: unless-stopped
+    depends_on:
+      - teleop
+
+  # ── rviz ──────────────────────────────────────────────────────────────────
+  # Runs RViz2 inside the container, rendered via Wayland (labwc + wayvnc).
+  #
+  # Activated by the 'rviz' profile:
+  #   bash scripts/launch.sh --rviz
+  #   bash scripts/rviz.sh --docker          (standalone, no other services)
+  #
+  # Display: Wayland-native via the host's /run/user/1000/wayland-0 socket.
+  # The socket path is hardcoded for UID 1000 (the 'master' user on this RPi).
+  # XWayland (:0) is also mounted as a fallback.
+  #
+  # The command waits 8 s before launching so robot_state_publisher has time
+  # to advertise /robot_description before RViz tries to subscribe to it.
+  rviz:
+    <<: *ros-service
+    profiles:
+      - rviz
+    # Run as the host login user (UID 1000) so the Wayland socket is accessible.
+    user: "1000:1000"
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      # Display: use XWayland (xcb) via DISPLAY=:0 — more reliable inside
+      # Docker on RPi/labwc than the wayland socket. Wayland socket is still
+      # mounted so qtwayland5 can be used if xcb is unavailable.
+      DISPLAY: ":0"
+      XAUTHORITY: /tmp/.host_Xauthority
+      QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
+      WAYLAND_DISPLAY: wayland-0
+      XDG_RUNTIME_DIR: /run/user/1000
+    volumes:
+      # Wayland runtime dir — contains wayland-0 socket
+      - /run/user/1000:/run/user/1000:rw
+      # XWayland socket — fallback
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /home/master/.Xauthority:/tmp/.host_Xauthority:ro
+      - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
+    command:
+      - bash
+      - -c
+      - |
+        # Wait for robot_state_publisher to be ready before RViz subscribes.
+        # robot_description service takes ~5 s to start controllers on RPi.
+        # Qt requires 0700 on XDG_RUNTIME_DIR; host labwc creates it 0770.
+        chmod 0700 /run/user/1000 2>/dev/null || true
+        echo "[rviz] waiting 8 s for robot_state_publisher..."
+        sleep 8
+        exec ros2 launch ecza_description display.launch.py \
+          gui:=false \
+          rvizconfig:=/config/rover.rviz
+    restart: "no"
+    depends_on:
+      - robot_description
+
+  # ── diagnostics ───────────────────────────────────────────────────────────
+  # Runs diagnostic_aggregator to collect and republish /diagnostics messages.
+  diagnostics:
+    <<: *ros-service
+    volumes: *config-mount
+    command: >
+      ros2 run diagnostic_aggregator aggregator_node
+      --ros-args --params-file /config/rover_params.yaml
+
+  # ── recorder ──────────────────────────────────────────────────────────────
+  # Activated only when COMPOSE_PROFILES=record (translated by launch.sh from
+  # RECORD=true). Writes .mcap bags to ./bags/ on the host (R-008).
+  recorder:
+    <<: *ros-service
+    profiles:
+      - record
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./bags:/bags:rw
+    command: >
+      bash -c "ros2 bag record
+      -o /bags/session_$$(date +%Y%m%d_%H%M%S)
+      /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
+
+  # ── slam_manager ──────────────────────────────────────────────────────────
+  # SLAM haritalama yöneticisi ve otonom frontier keşfi.
+  # Joystick tuşları:
+  #   A (btn 1) — otonom frontier keşfini aç/kapat (AUTO mod gerekli)
+  #   Y (btn 3) — mevcut SLAM haritasını /maps/ dizinine kaydet
+  # Profile: nav — sadece navigasyon yığını ile çalışır
+  slam_manager:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/controllers.yaml:/config/controllers.yaml:ro
+      - ./maps:/maps:rw
+      - ./src/ecza_teleop/ecza_teleop/slam_manager_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py:ro
+    command:
+      - python3
+      - /ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py
+      - --ros-args
+      - --params-file
+      - /config/rover_params.yaml
+    restart: unless-stopped
+    depends_on:
+      - navigation
+
+  # ── lidar ─────────────────────────────────────────────────────────────────
+  # RPLidar A2M12 driver. Publishes /scan (sensor_msgs/LaserScan).
+  # Device: /dev/ttyLIDAR (udev symlink — see /etc/udev/rules.d/99-esp32.rules)
+  # Profile: lidar — activate with: COMPOSE_PROFILES=lidar docker compose up
+  #          or: bash scripts/launch.sh --lidar
+  lidar:
+    <<: *ros-service
+    profiles:
+      - lidar
+      - nav
+    privileged: true
+    volumes:
+      - /dev:/dev
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+    command: >
+      ros2 launch ecza_lidar lidar.launch.py
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── navigation ────────────────────────────────────────────────────────────
+  # Nav2 + SLAM Toolbox autonomous navigation.
+  # Modes:
+  #   NAV_MODE=slam (default) — online SLAM, builds map while navigating
+  #   NAV_MODE=nav  MAP=/maps/my_map.yaml — Nav2 with AMCL on a saved map
+  # Profile: nav — activate with COMPOSE_PROFILES=nav
+  #
+  # ⚠️  CORRECT RESTART PROCEDURE — always use --force-recreate:
+  #   SLAM (default):
+  #     docker compose --profile nav up -d --force-recreate navigation lidar
+  #   Nav mode (saved map):
+  #     NAV_MODE=nav MAP=/maps/my_map.yaml \
+  #       docker compose --profile nav up -d --force-recreate navigation
+  #
+  #   ❌ Do NOT use `docker restart ecza-robotu-navigation-1`
+  #      It reuses the old container; new config/env changes are ignored.
+  #
+  # Fast config iteration (no rebuild needed — config is bind-mounted):
+  #   Edit src/ecza_navigation/config/nav2_params.yaml or any launch.py,
+  #   then just force-recreate the container (docker-compose.override.yaml
+  #   mounts src/ecza_navigation/ directly into the container).
+  navigation:
+    <<: *ros-service
+    profiles:
+      - nav
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      # Override on the command line to switch modes:
+      #   NAV_MODE=nav MAP=/maps/my_map.yaml docker compose --profile nav up -d --force-recreate navigation
+      NAV_MODE: ${NAV_MODE:-slam}
+      MAP: ${MAP:-}
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./maps:/maps:rw
+      # Bind-mount güncel config dosyaları — image rebuild gerektirmeden aktif olur
+      - ./src/ecza_navigation/config/nav2_params.yaml:/ws/install/share/ecza_navigation/config/nav2_params.yaml:ro
+      - ./src/ecza_navigation/config/slam_params.yaml:/ws/install/share/ecza_navigation/config/slam_params.yaml:ro
+      - ./src/ecza_navigation/config/navigate_through_poses_no_recovery.xml:/ws/install/share/ecza_navigation/config/navigate_through_poses_no_recovery.xml:ro
+      - ./src/ecza_navigation/launch/nav2_navigation.launch.py:/ws/install/share/ecza_navigation/launch/nav2_navigation.launch.py:ro
+    command:
+      - bash
+      - -c
+      - |
+        MODE=${NAV_MODE:-slam}
+        # Wait for the rest of the stack (hardware, lidar) to register their
+        # ROS2 services before launching Nav2. The lifecycle_manager's internal
+        # get_state service client has a hardcoded 2s timeout; if nodes are
+        # still initialising when it fires, bringup fails. A 15s sleep ensures
+        # all servers are ready on slow hardware (Raspberry Pi).
+        sleep 15
+        if [ "$$MODE" = "nav" ] && [ -n "$${MAP:-}" ]; then
+          exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=nav map:=$$MAP
+        else
+          exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=slam
+        fi
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+      - lidar
+
+# ---------------------------------------------------------------------------
+# Named volumes (none — bags use bind-mount for host accessibility)
+# Top-level volumes section intentionally empty; ./bags is auto-created by
+# Docker when the bind-mount source does not exist (T024).
+# ---------------------------------------------------------------------------

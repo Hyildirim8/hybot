@@ -1,0 +1,37 @@
+[Unit]
+Description=ecza-robotu rover stack
+Documentation=https://github.com/ecza-robotu
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=master
+Group=docker
+WorkingDirectory=/home/master/Workspace/ecza-robotu
+
+# Run foreground (no -d) so systemd tracks the process.
+# docker-compose.yaml has restart:unless-stopped on all services — Docker itself
+# keeps containers alive; systemd keeps this supervisor process alive.
+# --rviz starts the RViz2 visualiser alongside the rover stack.
+ExecStart=/bin/bash /home/master/Workspace/ecza-robotu/scripts/launch.sh --rviz
+ExecStop=/usr/bin/docker compose \
+    -f /home/master/Workspace/ecza-robotu/docker-compose.yaml \
+    --profile rviz \
+    down
+
+# If the supervisor exits unexpectedly, wait 10s then restart
+Restart=on-failure
+RestartSec=10
+
+# Give containers up to 60s to stop cleanly
+TimeoutStopSec=60
+
+# Forward journal output for `journalctl -u ecza-robotu`
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ecza-robotu
+
+[Install]
+WantedBy=multi-user.target
