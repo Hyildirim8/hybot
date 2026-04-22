@@ -74,10 +74,10 @@
     failed_goal_blacklist_radius_m: 0.45 # başarısız hedefe tekrar tekrar gitme
     max_failed_goals: 20
     goal_timeout_s: 45.0           # saniye — hedef tamamlanmadan önce max bekleme
-    explore_interval_s: 3.0        # saniye — frontier güncelleme periyodu
+    explore_interval_s: 1.5        # saniye — frontier güncelleme periyodu
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
-    direct_explore_speed: 0.70
+    direct_explore_speed: 1.00
     direct_explore_turn_speed: 1.00
     direct_explore_backup_speed: 0.35
     direct_explore_strafe_speed: 0.30
@@ -85,8 +85,8 @@
     direct_explore_lookahead_deg: 100.0  # açık yön arama açısı (±50°) — koridorda yan duvarı görmez
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
     min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
-    direct_explore_stop_distance: 0.45 # stop if obstacle within 45 cm in front cone
-    direct_explore_escape_distance: 0.35
+    direct_explore_stop_distance: 0.80 # 1m/s için daha erken yavaşla (45→80cm)
+    direct_explore_escape_distance: 0.40 # yüksek hızda daha güvenli geri mesafe
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
