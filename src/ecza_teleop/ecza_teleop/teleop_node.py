@@ -74,9 +74,13 @@ class TeleopNode(Node):
         self.declare_parameter("joy_watchdog_timeout_ms", 500)
         self.declare_parameter("reject_extreme_axis_startup", True)
         self.declare_parameter("enable_scan_safety", True)
+        self.declare_parameter("enable_scan_safety_in_auto", False)
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("front_obstacle_stop_distance", 0.45)
+        self.declare_parameter("front_obstacle_clear_distance", 0.75)
         self.declare_parameter("front_obstacle_angle_deg", 35.0)
+        self.declare_parameter("avoidance_turn_speed", 0.8)
+        self.declare_parameter("avoidance_strafe_speed", 0.25)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -101,12 +105,24 @@ class TeleopNode(Node):
             self.get_parameter("reject_extreme_axis_startup").value
         )
         self._enable_scan_safety = bool(self.get_parameter("enable_scan_safety").value)
+        self._enable_scan_safety_in_auto = bool(
+            self.get_parameter("enable_scan_safety_in_auto").value
+        )
         self._scan_topic = self.get_parameter("scan_topic").value
         self._front_stop_distance = float(
             self.get_parameter("front_obstacle_stop_distance").value
         )
+        self._front_clear_distance = float(
+            self.get_parameter("front_obstacle_clear_distance").value
+        )
         self._front_angle_rad = math.radians(
             float(self.get_parameter("front_obstacle_angle_deg").value)
+        )
+        self._avoidance_turn_speed = float(
+            self.get_parameter("avoidance_turn_speed").value
+        )
+        self._avoidance_strafe_speed = float(
+            self.get_parameter("avoidance_strafe_speed").value
         )
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
@@ -117,6 +133,8 @@ class TeleopNode(Node):
         self._axes_ready = not self._reject_extreme_axis_startup
         self._front_blocked = False
         self._front_obstacle_distance = math.inf
+        self._left_clearance = math.inf
+        self._right_clearance = math.inf
 
         # ── Publishers / Subscribers ──────────────────────────────────────
         # Use BEST_EFFORT QoS to match mecanum_drive_controller's subscription
@@ -168,7 +186,9 @@ class TeleopNode(Node):
             f"require_enable={self._require_en}, "
             f"reject_extreme_axis_startup={self._reject_extreme_axis_startup}, "
             f"scan_safety={self._enable_scan_safety}({self._scan_topic}, "
-            f"{self._front_stop_distance:.2f}m/{math.degrees(self._front_angle_rad):.0f}deg)"
+            f"auto={self._enable_scan_safety_in_auto}, "
+            f"stop={self._front_stop_distance:.2f}m, clear={self._front_clear_distance:.2f}m, "
+            f"front={math.degrees(self._front_angle_rad):.0f}deg)"
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -230,6 +250,8 @@ class TeleopNode(Node):
 
     def _scan_cb(self, msg: LaserScan) -> None:
         min_distance = math.inf
+        left_clearance = math.inf
+        right_clearance = math.inf
         half_angle = max(0.0, self._front_angle_rad / 2.0)
 
         for i, distance in enumerate(msg.ranges):
@@ -239,26 +261,52 @@ class TeleopNode(Node):
                 continue
 
             angle = msg.angle_min + (i * msg.angle_increment)
-            if abs(math.atan2(math.sin(angle), math.cos(angle))) <= half_angle:
+            angle = math.atan2(math.sin(angle), math.cos(angle))
+            abs_angle = abs(angle)
+            if abs_angle <= half_angle:
                 min_distance = min(min_distance, float(distance))
+
+            # Use front-side sectors for the escape direction. With a wide
+            # front cone, side-only sectors can be empty while an angled wall is
+            # still inside the front cone.
+            if 0.0 <= angle <= math.radians(110.0):
+                left_clearance = min(left_clearance, float(distance))
+            elif -math.radians(110.0) <= angle < 0.0:
+                right_clearance = min(right_clearance, float(distance))
 
         self._front_obstacle_distance = min_distance
         self._front_blocked = min_distance <= self._front_stop_distance
+        self._left_clearance = left_clearance
+        self._right_clearance = right_clearance
 
     def _apply_scan_safety(self, twist: Twist) -> Twist:
-        if (
-            not self._enable_scan_safety
-            or not self._front_blocked
-            or twist.linear.x <= 0.0
-        ):
+        if not self._enable_scan_safety or twist.linear.x <= 0.0:
+            return twist
+
+        if self._autonomous and not self._enable_scan_safety_in_auto:
+            return twist
+
+        if not self._front_blocked:
             return twist
 
         safe = Twist()
         safe.linear.x = 0.0
         safe.linear.y = twist.linear.y
         safe.angular.z = twist.angular.z
+
+        if self._autonomous:
+            turn_left = self._left_clearance >= self._right_clearance
+            side_clearance = self._left_clearance if turn_left else self._right_clearance
+            direction = 1.0 if turn_left else -1.0
+
+            safe.angular.z = direction * self._avoidance_turn_speed
+            if side_clearance >= self._front_clear_distance:
+                safe.linear.y = direction * self._avoidance_strafe_speed
+
         self.get_logger().warn(
-            f"front obstacle at {self._front_obstacle_distance:.2f}m; blocking forward command",
+            f"front obstacle at {self._front_obstacle_distance:.2f}m; "
+            f"{'avoiding' if self._autonomous else 'blocking forward command'} "
+            f"(left={self._left_clearance:.2f}m right={self._right_clearance:.2f}m)",
             throttle_duration_sec=1.0,
         )
         return safe
