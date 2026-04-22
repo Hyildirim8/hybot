@@ -148,9 +148,10 @@ controller_server:
       trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: true
       stateful: true
-      critics: ["Oscillation", "BaseObstacle", "GoalAlign",
-                "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 4.0   # engel maliyeti ağırlığı artırıldı
+      critics: ["Oscillation", "BaseObstacle", "ObstacleFootprint",
+                "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 4.0
+      ObstacleFootprint.scale: 6.0  # robot gövdesinin duvara yakınlığını cezalandır
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.2
       GoalAlign.scale: 14.0
@@ -187,8 +188,8 @@ local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: false
-      update_frequency: 10.0
-      publish_frequency: 5.0
+      update_frequency: 20.0   # 20 Hz — dynamic obstacle (person) detection
+      publish_frequency: 10.0
       global_frame: odom
       robot_base_frame: base_link
       rolling_window: true
