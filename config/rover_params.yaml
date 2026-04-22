@@ -53,11 +53,11 @@
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
-    enable_scan_safety_in_auto: true  # AUTO/keşifte ileri komutu da lidar güvenliğinden geçsin
+    enable_scan_safety_in_auto: false # Nav2 handles its own obstacle avoidance via DWB costmap
     scan_topic: "/scan"
-    front_obstacle_stop_distance: 0.70
-    front_obstacle_clear_distance: 0.95
-    front_obstacle_angle_deg: 180.0
+    front_obstacle_stop_distance: 0.45 # stop if obstacle within 45 cm directly ahead
+    front_obstacle_clear_distance: 0.65
+    front_obstacle_angle_deg: 45.0    # only check a narrow ±22.5° cone ahead, not side walls
     avoidance_turn_speed: 0.35
     avoidance_strafe_speed: 0.25
 
@@ -78,9 +78,9 @@
     direct_explore_speed: 0.08
     direct_explore_turn_speed: 0.45
     direct_explore_backup_speed: 0.16
-    direct_explore_stop_distance: 1.00
-    direct_explore_escape_distance: 0.65
-    direct_explore_front_angle_deg: 180.0
+    direct_explore_stop_distance: 0.60 # stop if obstacle within 60 cm in front cone
+    direct_explore_escape_distance: 0.35
+    direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
     # Two distinct watchdogs — do not conflate them.
