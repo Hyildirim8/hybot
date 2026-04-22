@@ -76,11 +76,12 @@
     explore_interval_s: 3.0        # saniye — frontier güncelleme periyodu
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
-    direct_explore_speed: 0.65
-    direct_explore_turn_speed: 1.20
-    direct_explore_backup_speed: 0.40
-    direct_explore_strafe_speed: 0.35
-    direct_explore_stop_distance: 0.60 # stop if obstacle within 60 cm in front cone
+    direct_explore_speed: 0.45
+    direct_explore_turn_speed: 1.00
+    direct_explore_backup_speed: 0.35
+    direct_explore_strafe_speed: 0.30
+    min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
+    direct_explore_stop_distance: 0.45 # stop if obstacle within 45 cm in front cone
     direct_explore_escape_distance: 0.35
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
 

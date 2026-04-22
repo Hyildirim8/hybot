@@ -62,6 +62,7 @@ class SlamManagerNode(Node):
         self.declare_parameter("direct_explore_stop_distance", 0.55)
         self.declare_parameter("direct_explore_escape_distance", 0.35)
         self.declare_parameter("direct_explore_front_angle_deg", 45.0)
+        self.declare_parameter("min_side_clearance_m", 0.35)
 
         self._btn_save     = self.get_parameter("btn_save_map").value
         self._btn_explore  = self.get_parameter("btn_explore_toggle").value
@@ -102,6 +103,9 @@ class SlamManagerNode(Node):
         self._lidar_angle_offset_rad = math.radians(
             float(self.get_parameter("lidar_angle_offset_deg").value)
         )
+        self._min_side_clearance = float(
+            self.get_parameter("min_side_clearance_m").value
+        )
 
         # ── Durum ─────────────────────────────────────────────────────────────
         self._exploring: bool              = False
@@ -110,6 +114,11 @@ class SlamManagerNode(Node):
         self._goal_handle                  = None
         self._active_goal: Optional[Tuple[float, float]] = None
         self._goal_sent_at: float          = 0.0
+        self._side_left_clearance: float   = math.inf   # 50°–90° sol taraf
+        self._side_right_clearance: float  = math.inf   # 50°–90° sağ taraf
+        self._back_obstacle_distance: float = math.inf  # arka mesafe (150°–180°)
+        self._escape_turn_sign: float      = 0.0        # kalıcı dönüş yönü (sallanmayı önle)
+        self._escape_turn_set_at: float    = 0.0
         self._failed_goals: List[Tuple[float, float]] = []
         self._direct_explore_active: bool   = False
         self._front_obstacle_distance: float = math.inf
@@ -197,6 +206,9 @@ class SlamManagerNode(Node):
         front = math.inf
         left = math.inf
         right = math.inf
+        side_left = math.inf   # doğrudan sol taraf (50°–90°) — dar boşluk tespiti
+        side_right = math.inf  # doğrudan sağ taraf (50°–90°) — dar boşluk tespiti
+        back = math.inf        # arka (150°–180°) — geri gitme güvenliği
         half_angle = max(0.0, self._direct_front_angle_rad / 2.0)
 
         for i, distance in enumerate(msg.ranges):
@@ -224,9 +236,25 @@ class SlamManagerNode(Node):
             elif -math.radians(120.0) <= shifted < 0.0:
                 right = min(right, float(distance))
 
+            # Narrow side sectors (50°–90°) detect walls/poles directly beside the robot.
+            # This catches thin pillars and corridor walls before the robot enters.
+            side_lo = math.radians(50.0)
+            side_hi = math.radians(90.0)
+            if side_lo <= shifted <= side_hi:
+                side_left = min(side_left, float(distance))
+            elif -side_hi <= shifted <= -side_lo:
+                side_right = min(side_right, float(distance))
+
+            # Back sector (±150°–180°): used to decide if reversing is safe.
+            if abs(shifted) >= math.radians(150.0):
+                back = min(back, float(distance))
+
         self._front_obstacle_distance = front
         self._left_clearance = left
         self._right_clearance = right
+        self._side_left_clearance = side_left
+        self._side_right_clearance = side_right
+        self._back_obstacle_distance = back
 
     # ── Harita kaydetme ───────────────────────────────────────────────────────
 
@@ -514,32 +542,89 @@ class SlamManagerNode(Node):
             return
 
         cmd = Twist()
-        # Turn and strafe toward the side with more clearance.
-        # Positive angular.z = CCW = robot left; positive linear.y = robot left.
-        turn_left = self._left_clearance >= self._right_clearance
-        sign = 1.0 if turn_left else -1.0
+        front_escape = self._front_obstacle_distance <= self._direct_escape_distance
+        front_stop   = self._front_obstacle_distance <= self._direct_stop_distance
+        narrow_left  = self._side_left_clearance < self._min_side_clearance
+        narrow_right = self._side_right_clearance < self._min_side_clearance
+        too_narrow   = narrow_left and narrow_right
+        back_blocked = self._back_obstacle_distance < 0.30
 
-        if self._front_obstacle_distance <= self._direct_escape_distance:
-            # Very close: back up hard + strafe + turn — use full mecanum capability.
+        # Kalıcı dönüş yönü: kaçış sırasında flip-flop yapmayı önler.
+        # Yol açık olunca sıfırlanır; kaçış devam ediyorsa yön korunur.
+        now = time.monotonic()
+        if front_escape or front_stop or too_narrow:
+            if self._escape_turn_sign == 0.0 or (now - self._escape_turn_set_at) > 4.0:
+                turn_left = self._left_clearance >= self._right_clearance
+                self._escape_turn_sign = 1.0 if turn_left else -1.0
+                self._escape_turn_set_at = now
+        else:
+            self._escape_turn_sign = 0.0  # serbest hareket → yön belleği sıfırla
+
+        sign = self._escape_turn_sign if self._escape_turn_sign != 0.0 else (
+            1.0 if self._left_clearance >= self._right_clearance else -1.0
+        )
+
+        if front_escape and too_narrow and back_blocked:
+            # ── 4 taraf kapalı (köşe): yerinde dön, hiçbir yöne gitme ──
+            cmd.angular.z = sign * self._direct_turn_speed
+            self.get_logger().warn(
+                f"Köşeye sıkıştı (ön={self._front_obstacle_distance:.2f}m "
+                f"arka={self._back_obstacle_distance:.2f}m); yerinde dönüş",
+                throttle_duration_sec=1.0,
+            )
+        elif front_escape and too_narrow:
+            # ── 3 taraf kapalı (önde + her iki yan): sadece geri + dön ──
+            cmd.linear.x = -self._direct_backup_speed
+            cmd.angular.z = sign * self._direct_turn_speed
+            self.get_logger().warn(
+                f"3 taraf kapalı (ön={self._front_obstacle_distance:.2f}m "
+                f"sol={self._side_left_clearance:.2f}m sağ={self._side_right_clearance:.2f}m); "
+                f"geri+dön",
+                throttle_duration_sec=1.0,
+            )
+        elif front_escape and back_blocked:
+            # ── Önde çok yakın + arka kapalı: sadece yan + dön (sıkıştı) ──
+            cmd.linear.y = sign * self._direct_strafe_speed
+            cmd.angular.z = sign * self._direct_turn_speed
+            self.get_logger().warn(
+                f"Önde+arkada sıkıştı; yan kaçış",
+                throttle_duration_sec=1.0,
+            )
+        elif front_escape:
+            # ── Önde çok yakın, yanlar ve arka açık: geri + yan + dön ──
             cmd.linear.x = -self._direct_backup_speed
             cmd.linear.y = sign * self._direct_strafe_speed
             cmd.angular.z = sign * self._direct_turn_speed
             self.get_logger().warn(
-                f"Duvar çok yakın ({self._front_obstacle_distance:.2f}m); "
-                f"geri+yan kaçış (sol={self._left_clearance:.2f}m sağ={self._right_clearance:.2f}m)",
+                f"Önde engel ({self._front_obstacle_distance:.2f}m); geri+yan+dön",
                 throttle_duration_sec=1.0,
             )
-        elif self._front_obstacle_distance <= self._direct_stop_distance:
-            # Medium distance: strafe sideways + turn without backing up.
-            # Strafing lets mecanum slide away from the wall without losing ground.
-            cmd.linear.x = 0.0
+        elif too_narrow and back_blocked:
+            # ── Dar koridor + arka kapalı: sadece dön ──
+            cmd.angular.z = sign * self._direct_turn_speed
+            self.get_logger().warn(
+                f"Dar koridor + arka kapalı; yerinde dönüş",
+                throttle_duration_sec=1.0,
+            )
+        elif too_narrow:
+            # ── Dar koridor, önde alan var: yavaş geri + dön ──
+            cmd.linear.x = -0.4 * self._direct_backup_speed
+            cmd.angular.z = sign * self._direct_turn_speed
+            self.get_logger().warn(
+                f"Dar koridor (sol={self._side_left_clearance:.2f}m "
+                f"sağ={self._side_right_clearance:.2f}m); geri çıkış",
+                throttle_duration_sec=1.0,
+            )
+        elif front_stop:
+            # ── Önde orta mesafe, yanlar açık: yan + dön ──
             cmd.linear.y = sign * self._direct_strafe_speed
             cmd.angular.z = sign * self._direct_turn_speed
             self.get_logger().warn(
-                f"Ön engel ({self._front_obstacle_distance:.2f}m); yan kaçış manevrası",
+                f"Ön engel ({self._front_obstacle_distance:.2f}m); yan kaçış",
                 throttle_duration_sec=1.0,
             )
         else:
+            # ── Yol açık: ileri ──
             cmd.linear.x = self._direct_speed
         self._cmd_pub.publish(cmd)
 
