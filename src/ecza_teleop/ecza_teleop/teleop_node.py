@@ -83,6 +83,7 @@ class TeleopNode(Node):
         self.declare_parameter("avoidance_turn_speed", 0.8)
         self.declare_parameter("avoidance_strafe_speed", 0.25)
         self.declare_parameter("lidar_angle_offset_deg", 0.0)
+        self.declare_parameter("strafe_invert", False)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -132,6 +133,7 @@ class TeleopNode(Node):
         self._lidar_angle_offset_rad = math.radians(
             float(self.get_parameter("lidar_angle_offset_deg").value)
         )
+        self._strafe_invert = bool(self.get_parameter("strafe_invert").value)
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
         # ── Autonomous mode state ─────────────────────────────────────────
@@ -390,21 +392,20 @@ class TeleopNode(Node):
         vx = axis(self._ax_lx) * self._max_lin
 
         # ── Strafe: stick axis PLUS dedicated buttons (additive, clamped) ─
-        # ROS base_link convention (REP-103): +Y = left, -Y = right.
-        # Strafe direction is intentionally inverted here to match the rover's
-        # observed hardware convention for left/right motion.
-        # Button LT(6) → strafe left
-        # Button RT(7) → strafe right
-        vy_stick = axis(self._ax_ly) * self._max_lin
+        # strafe_invert=false → positive vy = RIGHT (hardware convention on this rover)
+        # strafe_invert=true  → positive vy = LEFT  (ROS REP-103 convention)
+        # Flip strafe_invert in rover_params.yaml if D-pad/LT/RT directions are reversed.
+        ss = -1.0 if self._strafe_invert else 1.0
+        vy_stick = ss * axis(self._ax_ly) * self._max_lin
         vy_btn = 0.0
-        if btn(self._btn_sl):
-            vy_btn -= self._max_lin
-        if btn(self._btn_sr):
-            vy_btn += self._max_lin
+        if btn(self._btn_sl):   # LT → strafe left
+            vy_btn -= ss * self._max_lin
+        if btn(self._btn_sr):   # RT → strafe right
+            vy_btn += ss * self._max_lin
         vy = max(-self._max_lin, min(self._max_lin, vy_stick + vy_btn))
 
-        # ── Rotation: right stick X — push left/right = CCW/CW (+/-wz) ─
-        wz = axis(self._ax_az) * self._max_ang
+        # ── Rotation: right stick X — push right → CW → negative wz ─
+        wz = -axis(self._ax_az) * self._max_ang
 
         twist = Twist()
         twist.linear.x  = vx

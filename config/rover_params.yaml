@@ -43,14 +43,16 @@
     enable_button: 5               # RB — dead-man switch
     enable_button_alt: 4           # LB — alternate dead-man for mode compatibility
     require_enable_button: true    # safety: drive only while RB/LB dead-man is held
-    btn_strafe_left: 6             # LT — instant full-speed strafe left  (vy > 0)
-    btn_strafe_right: 7            # RT — instant full-speed strafe right (vy < 0)
+    btn_strafe_left: 6             # LT — instant full-speed strafe left
+    btn_strafe_right: 7            # RT — instant full-speed strafe right
+    strafe_invert: false           # true → sağ/sol yönleri ters çevir (D-pad/LT/RT ters ise true yap)
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
     btn_auto_mode_alt: 8           # Back — alternate toggle if Start is not mapped as expected
     btn_auto_mode_candidates: [9, 8] # accept either Start or Back for TELEOP <-> AUTO
     auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
     nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
+    reject_extreme_axis_startup: false  # joystick başlangıçta ±1 gönderince bekleme — kapat
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
     enable_scan_safety_in_auto: false # Nav2 handles avoidance; emergency stop below overrides
@@ -79,14 +81,14 @@
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     direct_explore_speed: 1.00
     direct_explore_turn_speed: 1.00
-    direct_explore_backup_speed: 0.35
+    direct_explore_backup_speed: 0.45
     direct_explore_strafe_speed: 0.30
-    direct_explore_kp: 1.8           # P-kontrolcü kazancı (rad/s per rad error)
-    direct_explore_lookahead_deg: 100.0  # açık yön arama açısı (±50°) — koridorda yan duvarı görmez
+    direct_explore_kp: 1.5           # P-kontrolcü kazancı — yükseltildi (1.2→1.5) daha hızlı dönüş
+    direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°) — sadece önü değerlendir
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
     min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
-    direct_explore_stop_distance: 0.80 # 1m/s için daha erken yavaşla (45→80cm)
-    direct_explore_escape_distance: 0.40 # yüksek hızda daha güvenli geri mesafe
+    direct_explore_stop_distance: 1.30  # 1.3m'de yavaşlamaya başla (daha fazla frenleme mesafesi)
+    direct_explore_escape_distance: 0.70 # 70cm'de geri kaç (was 50cm — çok yakın çarpıyordu)
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────

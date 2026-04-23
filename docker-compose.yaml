@@ -70,10 +70,8 @@ services:
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_teleop/ecza_teleop/teleop_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/teleop_node.py:ro
     command:
-      - ros2
-      - run
-      - ecza_teleop
-      - teleop_node
+      - python3
+      - /ws/install/lib/python3.10/site-packages/ecza_teleop/teleop_node.py
       - --ros-args
       - --params-file
       - /config/rover_params.yaml

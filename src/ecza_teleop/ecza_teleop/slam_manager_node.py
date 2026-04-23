@@ -66,6 +66,7 @@ class SlamManagerNode(Node):
         self.declare_parameter("direct_explore_kp", 1.8)          # P-kazancı
         self.declare_parameter("direct_explore_lookahead_deg", 140.0)  # açık yön arama açısı
         self.declare_parameter("direct_explore_react_distance", 1.5)   # engel tepki mesafesi
+        self.declare_parameter("strafe_invert", False)
 
         self._btn_save     = self.get_parameter("btn_save_map").value
         self._btn_explore  = self.get_parameter("btn_explore_toggle").value
@@ -116,6 +117,9 @@ class SlamManagerNode(Node):
         self._direct_react_distance = float(
             self.get_parameter("direct_explore_react_distance").value
         )
+        _strafe_invert = bool(self.get_parameter("strafe_invert").value)
+        # strafe_invert=false → positive vy = RIGHT (hardware), true → positive vy = LEFT (ROS)
+        self._strafe_h = 1.0 if not _strafe_invert else -1.0
 
         # ── Durum ─────────────────────────────────────────────────────────────
         self._exploring: bool              = False
@@ -391,7 +395,10 @@ class SlamManagerNode(Node):
             self._publish_zero()
 
     def _explore_tick(self) -> None:
-        """Keşif zamanlayıcısı: yeni frontier varsa Nav2 hedefi gönder."""
+        """Keşif zamanlayıcısı: hareket her zaman direct_explore ile sağlanır.
+        Nav2 hedef gönderimi kaldırıldı — geçişlerdeki durma/kalkma ortadan kalkar.
+        SLAM haritayı pasif olarak oluşturur; robot lidar ile sürekli hareket eder.
+        """
         if not self._exploring:
             return
 
@@ -403,31 +410,8 @@ class SlamManagerNode(Node):
             self._direct_explore_active = False
             return
 
-        if self._map is None:
-            self._enable_direct_explore("map bekleniyor")
-            return
-
-        # Aktif bir hedef varsa ve zaman aşımına uğramamışsa bekle
-        if self._goal_handle is not None:
-            elapsed = time.monotonic() - self._goal_sent_at
-            if elapsed < self._goal_timeout:
-                return
-            # Zaman aşımı — iptal et
-            self._blacklist_active_goal()
-            self._cancel_goal()
-            self._enable_direct_explore("Nav2 hedef zaman aşımı")
-
-        target = self._pick_frontier()
-        if target is None:
-            self.get_logger().info(
-                "Frontier bulunamadı — haritalama tamamlanmış olabilir",
-                throttle_duration_sec=10.0,
-            )
-            self._pub_status("Frontier yok — haritalama tamamlandı?")
-            self._enable_direct_explore("frontier yok")
-            return
-
-        self._send_goal(target[0], target[1])
+        # Hareket her zaman direct_explore'dan gelir — kesintisiz sürüş.
+        self._enable_direct_explore("keşif aktif")
 
     # ── Frontier bulma ────────────────────────────────────────────────────────
 
@@ -549,9 +533,8 @@ class SlamManagerNode(Node):
         if not handle.accepted:
             self.get_logger().warn("Keşif hedefi reddedildi")
             self._blacklist_active_goal()
-            self._enable_direct_explore("Nav2 hedefi reddetti")
             return
-        self._direct_explore_active = False
+        # direct_explore_active kaldırılmadı: hareket kesintisiz devam eder.
         self._goal_handle = handle
         handle.get_result_async().add_done_callback(self._on_goal_result)
 
@@ -599,93 +582,96 @@ class SlamManagerNode(Node):
             return
 
         cmd = Twist()
-        front_escape = self._front_obstacle_distance <= self._direct_escape_distance
+        front_dist   = self._front_obstacle_distance
+        front_escape = front_dist <= self._direct_escape_distance
         narrow_left  = self._side_left_clearance < self._min_side_clearance
         narrow_right = self._side_right_clearance < self._min_side_clearance
         too_narrow   = narrow_left and narrow_right
         back_blocked = self._back_obstacle_distance < 0.30
 
-        # ── P-kontrolcü: açı yumuşatma + orantılı dönüş ─────────────────────
-        # Düşük geçişli filtre: ani açı sıçramalarını söndür (sallanma önleme).
-        self._smooth_angle = 0.65 * self._best_open_angle + 0.35 * self._smooth_angle
-        error = self._smooth_angle
+        # ── P-kontrolcü: açı filtresi ─────────────────────────────────────────
+        # smooth_angle her zaman güncellenir ama sadece ön engel durumunda kullanılır.
+        self._smooth_angle = 0.45 * self._best_open_angle + 0.55 * self._smooth_angle
+        error  = self._smooth_angle
         p_turn = max(-self._direct_turn_speed,
                      min(self._direct_turn_speed, self._direct_kp * error))
-        cos_scale = max(0.0, math.cos(error))
-        sign = 1.0 if error >= 0.0 else -1.0
+        sign   = 1.0 if error >= 0.0 else -1.0
 
-        # ── Acil kaçış öncelikleri (P-kontrolcü buraları da kullanır) ─────────
+        # ── Acil kaçış (her durumda geri/yan/dönüş yapabilir) ─────────────────
         if front_escape and too_narrow and back_blocked:
-            # 4 taraf kapalı: P-kontrolcü ile yerinde dön
+            # 4 taraf: yerinde P-dön
             cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
-            self.get_logger().warn(
-                f"Köşeye sıkıştı (ön={self._front_obstacle_distance:.2f}m "
-                f"arka={self._back_obstacle_distance:.2f}m); P-dönüş",
-                throttle_duration_sec=1.0,
-            )
+            self.get_logger().warn("4 taraf kapalı; yerinde dön", throttle_duration_sec=1.0)
+
         elif front_escape and too_narrow:
-            # 3 taraf kapalı: geri + P-dönüş (strafe yok — yan duvarlar kapalı)
-            cmd.linear.x = -self._direct_backup_speed
+            # 3 taraf: geri + P-dön
+            cmd.linear.x  = -self._direct_backup_speed
             cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
             self.get_logger().warn(
-                f"3 taraf kapalı (ön={self._front_obstacle_distance:.2f}m); geri+P-dön",
-                throttle_duration_sec=1.0,
-            )
+                f"3 taraf kapalı (ön={front_dist:.2f}m); geri+dön", throttle_duration_sec=1.0)
+
         elif front_escape and back_blocked:
-            # Önde çok yakın + arka kapalı: P-dönüş + strafe
-            cmd.linear.y = sign * self._direct_strafe_speed
-            cmd.angular.z = p_turn
-            self.get_logger().warn(
-                "Önde+arkada sıkıştı; P-yan kaçış", throttle_duration_sec=1.0,
-            )
+            # Ön+arka: yan kaç + P-dön
+            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
+            cmd.angular.z = p_turn if abs(p_turn) >= 0.20 else sign * 0.30
+            self.get_logger().warn("Ön+arka kapalı; yan kaç", throttle_duration_sec=1.0)
+
         elif front_escape:
-            # Önde çok yakın: geri + P-dönüş + strafe
-            cmd.linear.x = -self._direct_backup_speed
-            cmd.linear.y = sign * self._direct_strafe_speed
-            cmd.angular.z = p_turn
+            # Ön: geri + yan kaç + P-dön; arkası açıksa güvenle geri git.
+            cmd.linear.x  = -self._direct_backup_speed
+            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
+            # Minimum 0.25 rad/s dönüş: küçük p_turn değerlerinde robot düz geri gider
+            # ve aynı engele tekrar çarpar — zorunlu bir dönüş ekle.
+            cmd.angular.z = p_turn if abs(p_turn) >= 0.25 else sign * 0.25
             self.get_logger().warn(
-                f"Önde engel ({self._front_obstacle_distance:.2f}m); geri+P-dön+yan",
-                throttle_duration_sec=1.0,
-            )
+                f"Ön engel ({front_dist:.2f}m); geri+yan+dön", throttle_duration_sec=1.0)
+
         elif too_narrow and back_blocked:
-            # Dar koridor + arka kapalı: yerinde P-dön
+            # Dar+arka: yerinde P-dön
             cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
-            self.get_logger().warn(
-                "Dar + arka kapalı; P-dönüş", throttle_duration_sec=1.0,
-            )
+            self.get_logger().warn("Dar+arka; yerinde dön", throttle_duration_sec=1.0)
+
         elif too_narrow:
-            # Dar koridor: yavaş geri + P-dönüş
-            cmd.linear.x = -0.4 * self._direct_backup_speed
+            # Dar: hafif geri + P-dön
+            cmd.linear.x  = -0.4 * self._direct_backup_speed
             cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
             self.get_logger().warn(
-                f"Dar koridor (sol={self._side_left_clearance:.2f}m "
-                f"sağ={self._side_right_clearance:.2f}m); geri+P-dön",
-                throttle_duration_sec=1.0,
-            )
+                f"Dar koridor (L={self._side_left_clearance:.2f} R={self._side_right_clearance:.2f}); geri+dön",
+                throttle_duration_sec=1.0)
+
         else:
-            # ── Normal sürüş: sürekli hız profili (stutter yok) ──────────────
-            # stop_distance'ta tam hız; escape_distance'a doğru lineer sıfırlanır.
-            front_dist = self._front_obstacle_distance
+            # ── Normal sürüş ─────────────────────────────────────────────────
+            # Kural: açık yolda tam hızda DÜZ GİT — P-dönüş YOK.
+            # Sadece ön engel yaklaşınca (stop_distance içinde) yavaşla + dön.
+            # Bu, kesikli hareket ve gereksiz kıvrımların ana sebebini ortadan kaldırır.
             if front_dist >= self._direct_stop_distance:
-                fwd_scale = 1.0
-            elif front_dist > self._direct_escape_distance:
+                # Açık yol: tam hız, sıfır dönüş
+                cmd.linear.x  = self._direct_speed
+                cmd.angular.z = 0.0
+            else:
+                # Engel yaklaşıyor: lineer yavaşla + P-kontrolcü ile dön
                 fwd_scale = (front_dist - self._direct_escape_distance) / (
                     self._direct_stop_distance - self._direct_escape_distance
                 )
-            else:
-                fwd_scale = 0.0
-            cmd.linear.x = self._direct_speed * cos_scale * fwd_scale
-            cmd.angular.z = p_turn
-            # Mecanum yan hizalama: koridor ortasında tut, yan duvara sürtmeyi önle.
-            # sol_boşluk < sağ_boşluk → sağa kay (y<0), tersi → sola kay (y>0).
+                fwd_scale = max(0.0, fwd_scale)
+                # Dönüş büyükse ileri hızı biraz azalt ama asla %50'nin altına düşme
+                cos_scale = max(0.50, math.cos(error))
+                cmd.linear.x  = self._direct_speed * fwd_scale * cos_scale
+                cmd.angular.z = p_turn
+
+            # Mecanum yan hizalama: koridor ortasında tut (P-dönüşten bağımsız).
+            # Sol duvar yakın → sağa kay; sağ duvar yakın → sola kay.
+            # side_err = side_left - side_right; -strafe_h flips per hardware convention.
             if self._side_left_clearance < 0.55 or self._side_right_clearance < 0.55:
                 side_err = self._side_left_clearance - self._side_right_clearance
                 cmd.linear.y = max(-self._direct_strafe_speed,
-                                   min(self._direct_strafe_speed, 0.8 * side_err))
+                                   min(self._direct_strafe_speed, -self._strafe_h * 0.8 * side_err))
 
-        # Exponential smoothing — her tick'te anlık hız yerine yumuşak geçiş.
-        # Keskin dönüşleri ortadan kaldırır; PID ramp davranışını simüle eder.
-        a = self._SMOOTH_ALPHA
+        # ── Exponential smoothing ─────────────────────────────────────────────
+        # Acil durumlarda (ön engel / dar) alpha yüksek tutulur → hızlı tepki.
+        # Normal sürüşte düşük alpha → yumuşak hareket.
+        in_emergency = front_escape or too_narrow or back_blocked
+        a = 0.85 if in_emergency else self._SMOOTH_ALPHA
         self._smooth_vx = a * cmd.linear.x  + (1.0 - a) * self._smooth_vx
         self._smooth_vy = a * cmd.linear.y  + (1.0 - a) * self._smooth_vy
         self._smooth_wz = a * cmd.angular.z + (1.0 - a) * self._smooth_wz
