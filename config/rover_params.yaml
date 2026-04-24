@@ -87,8 +87,8 @@
     direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°) — sadece önü değerlendir
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
     min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
-    direct_explore_stop_distance: 0.70  # 70cm'de yavaşlamaya başla — erken durma düzeltildi
-    direct_explore_escape_distance: 0.35 # 35cm'de geri kaç — gap geçişine izin ver
+    direct_explore_stop_distance: 0.42  # robota yakın dur — 70cm çok erken, sallanma yapıyordu
+    direct_explore_escape_distance: 0.28 # geri kaç mesafesi — escape ve stop arası boşluk küçük
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────

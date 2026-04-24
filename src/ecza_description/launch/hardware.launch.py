@@ -102,7 +102,7 @@ def generate_launch_description() -> LaunchDescription:
     # to the top-level /cmd_vel topic published by the teleop node.
     # use_stamped_vel: false (in controllers.yaml) makes it accept Twist, not TwistStamped.
     spawn_mecanum = TimerAction(
-        period=2.0,
+        period=1.0,
         actions=[Node(
             package="controller_manager",
             executable="spawner",

@@ -51,12 +51,27 @@ services:
     volumes:
       - /dev/input:/dev/input           # joystick device hot-plug
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
-    command: >
-      ros2 run joy joy_node
-      --ros-args
-      -p dev:=/dev/input/js0
-      -p autorepeat_rate:=50.0
-      -p deadzone:=0.05
+    command:
+      - bash
+      - -c
+      - |
+        source /opt/ros/humble/setup.bash
+        # Publish zero /joy for 3s so teleop is ready before joy_linux_node takes over.
+        # autorepeat_rate only fires after first HID event on wireless gamepads;
+        # this eliminates the "no /joy" watchdog gap on every restart.
+        timeout 3 ros2 topic pub /joy sensor_msgs/msg/Joy \
+          '{header: {frame_id: "joy"}, axes: [0.0,0.0,0.0,0.0,0.0,0.0], buttons: [0,0,0,0,0,0,0,0,0,0,0,0]}' \
+          --rate 10 || true
+        JOY_DEV="$$(find /dev/input/by-id -maxdepth 1 -type l -name '*-joystick' ! -name '*event-joystick' | head -n 1)"
+        if [ -z "$$JOY_DEV" ]; then
+          JOY_DEV=/dev/input/js0
+        fi
+        echo "[joy] using device: $$JOY_DEV"
+        exec ros2 run joy_linux joy_linux_node \
+          --ros-args \
+          -p dev:="$$JOY_DEV" \
+          -p autorepeat_rate:=50.0 \
+          -p deadzone:=0.05
     restart: unless-stopped             # auto-retry on replug / permission error
 
   # ── teleop ────────────────────────────────────────────────────────────────
@@ -114,6 +129,7 @@ services:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
+      - ./src/ecza_description/launch/hardware.launch.py:/ws/install/share/ecza_description/launch/hardware.launch.py:ro
     command: >
       ros2 launch ecza_description hardware.launch.py
     restart: unless-stopped
@@ -296,9 +312,8 @@ services:
         # Wait for the rest of the stack (hardware, lidar) to register their
         # ROS2 services before launching Nav2. The lifecycle_manager's internal
         # get_state service client has a hardcoded 2s timeout; if nodes are
-        # still initialising when it fires, bringup fails. A 15s sleep ensures
-        # all servers are ready on slow hardware (Raspberry Pi).
-        sleep 15
+        # still initialising when it fires, bringup fails. 8s is enough on RPi.
+        sleep 8
         if [ "$$MODE" = "nav" ] && [ -n "$${MAP:-}" ]; then
           exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=nav map:=$$MAP
         else
