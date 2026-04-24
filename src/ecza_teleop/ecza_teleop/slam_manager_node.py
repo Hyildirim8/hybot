@@ -133,6 +133,7 @@ class SlamManagerNode(Node):
         self._back_obstacle_distance: float = math.inf  # arka mesafe (150°–180°)
         self._escape_turn_sign: float      = 0.0        # kalıcı dönüş yönü (sallanmayı önle)
         self._escape_turn_set_at: float    = 0.0
+        self._last_escape_time: float      = 0.0        # escape'den çıkınca yönelim bekle
         self._best_open_angle: float       = 0.0        # P-kontrolcü hedef açısı (robot çerçevesi)
         self._smooth_angle: float          = 0.0        # düşük geçişli filtrelenmiş hedef açı
         # Velocity smoothing — exponential low-pass filter (alpha=0.55 at 10 Hz)
@@ -595,69 +596,98 @@ class SlamManagerNode(Node):
         error  = self._smooth_angle
         p_turn = max(-self._direct_turn_speed,
                      min(self._direct_turn_speed, self._direct_kp * error))
-        sign   = 1.0 if error >= 0.0 else -1.0
+
+        # ── Kaçış yön kilidi ──────────────────────────────────────────────────
+        # Ön engel tespit edilir edilmez yönü kilitle — sallanmayı önle.
+        # ±40° P-kontrolcü değil, ±120° geniş açı clearance kullanılır:
+        # köşelerde ±40° tamamen kapalı olabileceğinden geniş açı daha güvenilir.
+        in_obstacle_zone = front_escape or too_narrow or (front_dist < self._direct_stop_distance)
+        if in_obstacle_zone:
+            self._last_escape_time = time.monotonic()
+            if self._escape_turn_sign == 0.0:
+                # Sol (0°-120°) vs sağ (-120°-0°) açıklık karşılaştır
+                # 0.15m histerezis: eşit durumda varsayılan saat yönü (CW = -1)
+                if self._left_clearance > self._right_clearance + 0.15:
+                    self._escape_turn_sign = 1.0   # CCW — solda daha fazla alan
+                else:
+                    self._escape_turn_sign = -1.0  # CW  — sağda daha fazla alan (veya varsayılan)
+            sign = self._escape_turn_sign
+        else:
+            self._escape_turn_sign = 0.0
+            sign = 1.0 if error >= 0.0 else -1.0
+
+        # Her dalda dönüş: sign yönü korunur, P-kontrolcünün büyüklüğü kullanılır.
+        # "p_turn if abs >= X else sign*X" yerine "sign * max(abs(p_turn), X)" —
+        # böylece P-kontrolcü sign'ı geçersiz kılamaz.
+        def locked_turn(min_speed: float) -> float:
+            return sign * max(abs(p_turn), min_speed)
 
         # ── Acil kaçış (her durumda geri/yan/dönüş yapabilir) ─────────────────
         if front_escape and too_narrow and back_blocked:
-            # 4 taraf: yerinde P-dön
-            cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
-            self.get_logger().warn("4 taraf kapalı; yerinde dön", throttle_duration_sec=1.0)
+            # 4 taraf kapalı: anlık clearance'a göre en açık tarafa tam hızda dön.
+            # escape_turn_sign kilidi kullanılmaz — her tick'te yeniden değerlendir.
+            spin = 1.0 if self._left_clearance > self._right_clearance + 0.10 else -1.0
+            cmd.angular.z = spin * self._direct_turn_speed
+            self.get_logger().warn(
+                f"4 taraf kapalı; açık yön arıyor "
+                f"(sol={self._left_clearance:.2f} sağ={self._right_clearance:.2f})",
+                throttle_duration_sec=1.0)
 
         elif front_escape and too_narrow:
-            # 3 taraf: geri + P-dön
+            # Ön+yan: geri + dön
             cmd.linear.x  = -self._direct_backup_speed
-            cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
+            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
+            cmd.angular.z = locked_turn(self._direct_turn_speed)
             self.get_logger().warn(
                 f"3 taraf kapalı (ön={front_dist:.2f}m); geri+dön", throttle_duration_sec=1.0)
 
         elif front_escape and back_blocked:
-            # Ön+arka: yan kaç + P-dön
+            # Ön+arka: yan kaç + dön
             cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
-            cmd.angular.z = p_turn if abs(p_turn) >= 0.20 else sign * 0.30
+            cmd.angular.z = locked_turn(0.50)
             self.get_logger().warn("Ön+arka kapalı; yan kaç", throttle_duration_sec=1.0)
 
         elif front_escape:
-            # Ön: geri + yan kaç + P-dön; arkası açıksa güvenle geri git.
+            # Ön: geri + yan + dön
             cmd.linear.x  = -self._direct_backup_speed
             cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
-            # Minimum 0.25 rad/s dönüş: küçük p_turn değerlerinde robot düz geri gider
-            # ve aynı engele tekrar çarpar — zorunlu bir dönüş ekle.
-            cmd.angular.z = p_turn if abs(p_turn) >= 0.25 else sign * 0.25
+            cmd.angular.z = locked_turn(0.50)
             self.get_logger().warn(
                 f"Ön engel ({front_dist:.2f}m); geri+yan+dön", throttle_duration_sec=1.0)
 
         elif too_narrow and back_blocked:
-            # Dar+arka: yerinde P-dön
-            cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
+            # Dar+arka: yerinde dön
+            cmd.angular.z = locked_turn(self._direct_turn_speed)
             self.get_logger().warn("Dar+arka; yerinde dön", throttle_duration_sec=1.0)
 
         elif too_narrow:
-            # Dar: hafif geri + P-dön
+            # Dar: hafif geri + dön
             cmd.linear.x  = -0.4 * self._direct_backup_speed
-            cmd.angular.z = p_turn if abs(p_turn) > 0.05 else sign * self._direct_turn_speed
+            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
+            cmd.angular.z = locked_turn(self._direct_turn_speed)
             self.get_logger().warn(
                 f"Dar koridor (L={self._side_left_clearance:.2f} R={self._side_right_clearance:.2f}); geri+dön",
                 throttle_duration_sec=1.0)
 
         else:
             # ── Normal sürüş ─────────────────────────────────────────────────
-            # Kural: açık yolda tam hızda DÜZ GİT — P-dönüş YOK.
-            # Sadece ön engel yaklaşınca (stop_distance içinde) yavaşla + dön.
-            # Bu, kesikli hareket ve gereksiz kıvrımların ana sebebini ortadan kaldırır.
             if front_dist >= self._direct_stop_distance:
-                # Açık yol: tam hız, sıfır dönüş
-                cmd.linear.x  = self._direct_speed
-                cmd.angular.z = 0.0
+                # Escape'den yeni çıktıysak ve hâlâ yanlış yöne bakıyorsak: önce dön
+                post_escape_s = time.monotonic() - self._last_escape_time
+                if post_escape_s < 1.5 and abs(error) > 0.20:
+                    cmd.angular.z = sign * 0.50
+                else:
+                    # Açık yol: tam hız, sıfır dönüş
+                    cmd.linear.x  = self._direct_speed
+                    cmd.angular.z = 0.0
+            elif not back_blocked:
+                # Ön kapalı, arka açık: geri + yan + dön
+                cmd.linear.x  = -self._direct_backup_speed
+                cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
+                cmd.angular.z = locked_turn(0.50)
             else:
-                # Engel yaklaşıyor: lineer yavaşla + P-kontrolcü ile dön
-                fwd_scale = (front_dist - self._direct_escape_distance) / (
-                    self._direct_stop_distance - self._direct_escape_distance
-                )
-                fwd_scale = max(0.0, fwd_scale)
-                # Dönüş büyükse ileri hızı biraz azalt ama asla %50'nin altına düşme
-                cos_scale = max(0.50, math.cos(error))
-                cmd.linear.x  = self._direct_speed * fwd_scale * cos_scale
-                cmd.angular.z = p_turn
+                # Ön+arka kapalı: yerinde dön
+                cmd.angular.z = locked_turn(0.50)
 
             # Mecanum yan hizalama: koridor ortasında tut (P-dönüşten bağımsız).
             # Sol duvar yakın → sağa kay; sağ duvar yakın → sola kay.
@@ -670,7 +700,7 @@ class SlamManagerNode(Node):
         # ── Exponential smoothing ─────────────────────────────────────────────
         # Acil durumlarda (ön engel / dar) alpha yüksek tutulur → hızlı tepki.
         # Normal sürüşte düşük alpha → yumuşak hareket.
-        in_emergency = front_escape or too_narrow or back_blocked
+        in_emergency = front_escape or too_narrow or back_blocked or in_obstacle_zone
         a = 0.85 if in_emergency else self._SMOOTH_ALPHA
         self._smooth_vx = a * cmd.linear.x  + (1.0 - a) * self._smooth_vx
         self._smooth_vy = a * cmd.linear.y  + (1.0 - a) * self._smooth_vy
