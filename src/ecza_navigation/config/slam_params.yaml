@@ -37,17 +37,17 @@ slam_toolbox:
     # Loop closure
     enable_interactive_mode: true
     use_scan_matching: true
-    use_scan_barycenter: true
+    use_scan_barycenter: false         # koridorda dönüşte yalancı paralel koridor eşleşmesini azalt
     minimum_travel_distance: 0.3
-    minimum_travel_heading: 0.2    # düşük: sık scan → duvar boşluğu önlenir
-    scan_buffer_size: 10
+    minimum_travel_heading: 0.50       # 90° dönüşte max 3 node → yaw hatası birikimini azalt
+    scan_buffer_size: 15              # was 10 — daha fazla scan ortalaması, daha sağlam eşleşme
     scan_buffer_maximum_scan_distance: 10.0
-    link_match_minimum_response_fine: 0.1
-    distance_variance_penalty: 0.5
-    angle_variance_penalty: 1.0
+    link_match_minimum_response_fine: 0.25  # dönüş sırasında geçerli eşleşmeleri kabul et
+    distance_variance_penalty: 0.8
+    angle_variance_penalty: 1.6
     fine_search_angle_offset: 0.00349
-    coarse_search_angle_offset: 0.349
+    coarse_search_angle_offset: 0.524     # was 0.349 — 30° geniş arama, odometri hatasını tolere et
     coarse_angle_resolution: 0.0349
-    minimum_angle_penalty: 0.9
+    minimum_angle_penalty: 1.2
     minimum_distance_penalty: 0.5
     use_response_expansion: true

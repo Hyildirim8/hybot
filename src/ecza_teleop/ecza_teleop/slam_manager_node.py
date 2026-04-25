@@ -71,6 +71,8 @@ class SlamManagerNode(Node):
         self.declare_parameter("direct_explore_kp", 1.8)          # P-kazancı
         self.declare_parameter("direct_explore_lookahead_deg", 140.0)  # açık yön arama açısı
         self.declare_parameter("direct_explore_react_distance", 1.5)   # engel tepki mesafesi
+        self.declare_parameter("direct_explore_recovery_backup_time_s", 0.9)
+        self.declare_parameter("direct_explore_recovery_rotate_time_s", 1.1)
         self.declare_parameter("strafe_invert", False)
 
         self._btn_save     = self.get_parameter("btn_save_map").value
@@ -123,6 +125,12 @@ class SlamManagerNode(Node):
         self._direct_react_distance = float(
             self.get_parameter("direct_explore_react_distance").value
         )
+        self._recovery_backup_time = float(
+            self.get_parameter("direct_explore_recovery_backup_time_s").value
+        )
+        self._recovery_rotate_time = float(
+            self.get_parameter("direct_explore_recovery_rotate_time_s").value
+        )
         _strafe_invert = bool(self.get_parameter("strafe_invert").value)
         # strafe_invert=false → positive vy = RIGHT (hardware), true → positive vy = LEFT (ROS)
         self._strafe_h = 1.0 if not _strafe_invert else -1.0
@@ -140,8 +148,12 @@ class SlamManagerNode(Node):
         self._escape_turn_sign: float      = 0.0        # kalıcı dönüş yönü (sallanmayı önle)
         self._escape_turn_set_at: float    = 0.0
         self._frontier_target_angle: Optional[float] = None  # robot frame frontier açısı
-        self._best_open_angle: float       = 0.0        # P-kontrolcü hedef açısı (robot çerçevesi)
+        self._best_open_angle: float       = 0.0        # P-kontrolcü hedef açısı (±70°, robot çerçevesi)
+        self._best_escape_angle: float     = 0.0        # Kaçış için en açık yön (360°, ön öncelikli)
         self._smooth_angle: float          = 0.0        # düşük geçişli filtrelenmiş hedef açı
+        self._recovery_active: bool        = False
+        self._recovery_started_at: float   = 0.0
+        self._recovery_turn_sign: float    = 0.0
         # Velocity smoothing — exponential low-pass filter (alpha=0.55 at 10 Hz)
         # Eliminates sharp step-changes in velocity commands; PID-like ramp behaviour.
         self._smooth_vx: float = 0.0
@@ -153,6 +165,7 @@ class SlamManagerNode(Node):
         self._frontier_lock = threading.Lock()
         self._frontier_thread: Optional[threading.Thread] = None
         self._frontier_generation: int = 0
+        self._pending_frontier: Optional[Tuple[float, float]] = None
         self._front_obstacle_distance: float = math.inf
         self._left_clearance: float         = math.inf
         self._right_clearance: float        = math.inf
@@ -245,6 +258,7 @@ class SlamManagerNode(Node):
         if not self._autonomous:
             self._direct_explore_active = False
             self._invalidate_frontier_target()
+            self._escape_turn_sign = 0.0
             self._publish_zero()
 
     def _scan_cb(self, msg: LaserScan) -> None:
@@ -263,6 +277,11 @@ class SlamManagerNode(Node):
         n_sectors = int(2 * math.degrees(self._direct_lookahead_rad) / sector_deg)
         sector_min = [math.inf] * n_sectors   # her sektörün en yakın engeli
         lookahead = self._direct_lookahead_rad
+
+        # 360° kaçış sektör analizi (10° çözünürlük, ön 180° öncelikli)
+        _ESC_DEG = 10
+        _N_ESC   = 36
+        esc_min  = [math.inf] * _N_ESC
 
         for i, distance in enumerate(msg.ranges):
             if not math.isfinite(distance):
@@ -303,12 +322,16 @@ class SlamManagerNode(Node):
                 back = min(back, float(distance))
 
             # P-kontrolcü sektör analizi: her sektörde en yakın engeli kaydet.
-            # Açık alan (sensör yok) = math.inf → react_distance kadar açık sayılır.
             if abs(shifted) <= lookahead and n_sectors > 0:
                 sector_width = 2.0 * lookahead / n_sectors
                 idx = int((shifted + lookahead) / sector_width)
                 idx = max(0, min(n_sectors - 1, idx))
                 sector_min[idx] = min(sector_min[idx], float(distance))
+
+            # 360° kaçış analizi: shifted ∈ (-π, π] → 0-360° indeksine çevir
+            shifted_360 = math.degrees(shifted) % 360.0
+            esc_idx = int(shifted_360 / _ESC_DEG) % _N_ESC
+            esc_min[esc_idx] = min(esc_min[esc_idx], float(distance))
 
         # En açık sektör: en büyük minimum mesafeye sahip sektör.
         # Sensörü gelmeyen sektör (açık alan) react_distance ile puanlanır.
@@ -341,6 +364,22 @@ class SlamManagerNode(Node):
             self._best_open_angle = -lookahead + (best_idx + 0.5) * sector_width
         else:
             self._best_open_angle = 0.0
+
+        # En açık kaçış yönü (360°, ön 180° öncelikli)
+        best_esc_score = -1.0
+        best_esc_angle = 0.0
+        for ei in range(_N_ESC):
+            center_deg = (ei + 0.5) * _ESC_DEG          # 0..360
+            # -180..+180 normalize: 0=ileri, +90=sol, -90=sağ, ±180=arka
+            centered = center_deg if center_deg <= 180.0 else center_deg - 360.0
+            clearance = esc_min[ei] if esc_min[ei] != math.inf else self._direct_react_distance
+            # Ön 180°'ye bonus: 0°=+0.5, 90°=+0.25, 180°=0
+            front_bonus = 0.5 * max(0.0, 1.0 - abs(centered) / 180.0)
+            score = clearance + front_bonus
+            if score > best_esc_score:
+                best_esc_score = score
+                best_esc_angle = math.radians(centered)
+        self._best_escape_angle = best_esc_angle
 
         self._front_obstacle_distance = front
         self._left_clearance = left
@@ -421,6 +460,8 @@ class SlamManagerNode(Node):
         self._failed_goals.clear()
         self._cancel_goal()
         self._direct_explore_active = False
+        self._pending_frontier = None
+        self._escape_turn_sign = 0.0
         self._escape_turn_sign = 0.0
         self._smooth_angle = 0.0
         self._smooth_vx = 0.0
@@ -445,11 +486,19 @@ class SlamManagerNode(Node):
         if not self._exploring:
             self._cancel_goal()
             self._direct_explore_active = False
+            self._pending_frontier = None
             self._invalidate_frontier_target()
+            self._escape_turn_sign = 0.0
             self._publish_zero()
 
     def _explore_tick(self) -> None:
-        """Keşif zamanlayıcısı: hareket her zaman direct_explore ile sağlanır."""
+        """Keşif zamanlayıcısı: Nav2 hedefli frontier exploration.
+
+        Akış:
+          1. Arka plan thread'den hazır frontier varsa → Nav2 hedefi gönder.
+          2. Nav2 aktif geziyorsa    → sadece timeout kontrolü yap, karışma.
+          3. Boşta (hedef yok)       → background thread başlat; o sırada direct_explore.
+        """
         if not self._exploring:
             return
 
@@ -461,20 +510,38 @@ class SlamManagerNode(Node):
             self._direct_explore_active = False
             return
 
-        self._enable_direct_explore("keşif aktif")
+        # ── 1. Arka plandan frontier hazırsa Nav2 hedefi gönder ─────────────
+        if self._pending_frontier is not None:
+            frontier = self._pending_frontier
+            self._pending_frontier = None
+            self._direct_explore_active = False   # Nav2 devralıyor
+            self._send_goal(frontier[0], frontier[1])
+            return
 
-        # Frontier hesaplaması arka planda çalışır — executor bloke olmaz.
-        # _pick_frontier_from() büyük haritada 2-5 sn sürer; senkron çağrı
-        # _direct_explore_tick'i durdurur → robot durur. Thread bu sorunu çözer.
-        if self._map is not None:
-            if self._frontier_thread is None or not self._frontier_thread.is_alive():
-                snap = self._map  # referans snapshot — thread çalışırken map değişse de sorun yok
+        # ── 2. Nav2 aktif geziyorsa — sadece timeout izle ────────────────────
+        if self._goal_handle is not None:
+            elapsed = time.monotonic() - self._goal_sent_at
+            if elapsed > self._goal_timeout:
+                self.get_logger().warn(
+                    f"Hedef zaman aşımı ({elapsed:.0f}s) — iptal ediliyor"
+                )
+                self._cancel_goal()
+                self._blacklist_active_goal()
+                self._enable_direct_explore("hedef zaman aşımı")
+            return  # Nav2 sürüyor, karışma
+
+        # ── 3. Boşta: arka planda frontier hesapla, o sırada direct_explore ─
+        if self._frontier_thread is None or not self._frontier_thread.is_alive():
+            snap = self._map
+            if snap is not None:
                 with self._frontier_lock:
                     generation = self._frontier_generation
                 self._frontier_thread = threading.Thread(
-                    target=self._update_frontier_bg, args=(snap, generation), daemon=True
+                    target=self._compute_frontier_bg, args=(snap, generation), daemon=True
                 )
                 self._frontier_thread.start()
+
+        self._enable_direct_explore("frontier hesaplanıyor")
 
     def _invalidate_frontier_target(self) -> None:
         """Eski background sonuçlarını geçersiz kıl ve frontier açısını temizle."""
@@ -482,37 +549,50 @@ class SlamManagerNode(Node):
             self._frontier_generation += 1
             self._frontier_target_angle = None
 
-    def _update_frontier_bg(self, map_snap: OccupancyGrid, generation: int) -> None:
-        """Arka plan iş parçacığında frontier açısını hesapla ve güncelle."""
+    def _compute_frontier_bg(self, map_snap: OccupancyGrid, generation: int) -> None:
+        """Arka plan thread: frontier bul, yön açısı hesapla, main thread'e bildir."""
         frontier = self._pick_frontier_from(map_snap)
-        target_angle: Optional[float] = None
-        if frontier is not None:
-            try:
-                tf = self._tf_buffer.lookup_transform(
-                    'map', 'base_link', rclpy.time.Time(),
-                    timeout=rclpy.duration.Duration(seconds=0.05),
-                )
-                rx = tf.transform.translation.x
-                ry = tf.transform.translation.y
-                q  = tf.transform.rotation
-                yaw = math.atan2(
-                    2.0 * (q.w * q.z + q.x * q.y),
-                    1.0 - 2.0 * (q.y * q.y + q.z * q.z),
-                )
-                dx = frontier[0] - rx
-                dy = frontier[1] - ry
-                world_angle = math.atan2(dy, dx)
-                target_angle = math.atan2(
-                    math.sin(world_angle - yaw),
-                    math.cos(world_angle - yaw),
-                )
-            except Exception:
-                target_angle = None
 
         with self._frontier_lock:
             if generation != self._frontier_generation:
-                return
-            self._frontier_target_angle = target_angle
+                return   # keşif iptal edildi, sonucu çöp
+
+        if frontier is None:
+            self._frontier_target_angle = None
+            self._pending_frontier = None
+            self.get_logger().info(
+                "Tüm frontierlar keşfedildi veya kara listede",
+                throttle_duration_sec=10.0,
+            )
+            return
+
+        # Direktif sürüş için yön tavsiyesi (Nav2 beklenirken direct_explore'u yönlendirir)
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.05),
+            )
+            rx  = tf.transform.translation.x
+            ry  = tf.transform.translation.y
+            q   = tf.transform.rotation
+            yaw = math.atan2(
+                2.0 * (q.w * q.z + q.x * q.y),
+                1.0 - 2.0 * (q.y * q.y + q.z * q.z),
+            )
+            dx = frontier[0] - rx
+            dy = frontier[1] - ry
+            world_angle = math.atan2(dy, dx)
+            with self._frontier_lock:
+                if generation == self._frontier_generation:
+                    self._frontier_target_angle = math.atan2(
+                        math.sin(world_angle - yaw),
+                        math.cos(world_angle - yaw),
+                    )
+        except Exception:
+            pass
+
+        # Main thread'e sinyal: bir sonraki _explore_tick'te Nav2 hedefi gönder
+        self._pending_frontier = frontier
 
     # ── Frontier bulma ────────────────────────────────────────────────────────
 
@@ -631,11 +711,14 @@ class SlamManagerNode(Node):
     def _on_goal_accepted(self, future) -> None:
         handle = future.result()
         if not handle.accepted:
-            self.get_logger().warn("Keşif hedefi reddedildi")
+            self.get_logger().warn("Keşif hedefi reddedildi — fallback")
             self._blacklist_active_goal()
+            self._active_goal = None
+            self._enable_direct_explore("hedef reddedildi")
             return
-        # direct_explore_active kaldırılmadı: hareket kesintisiz devam eder.
         self._goal_handle = handle
+        self._direct_explore_active = False   # Nav2 navige ediyor, direct_explore durur
+        self._pub_status(f"Nav2 → ({self._active_goal[0]:.1f}, {self._active_goal[1]:.1f})")
         handle.get_result_async().add_done_callback(self._on_goal_result)
 
     def _on_goal_result(self, future) -> None:
@@ -643,18 +726,22 @@ class SlamManagerNode(Node):
             result = future.result()
             status = getattr(result, "status", 0)
             if status == 4:  # STATUS_SUCCEEDED
-                # Başarıyla tamamlandı; sonraki frontier bulunana kadar hareket et.
-                # _explore_tick bir sonraki çevrimde yeni hedef gönderir (explore_interval_s).
-                self._enable_direct_explore("frontier tamamlandı, sonraki bekleniyor")
+                self.get_logger().info("Frontier başarıyla tamamlandı — sonraki aranıyor")
+                self._pub_status("Frontier ✓")
+                # direct_explore açma: _explore_tick bir sonraki çevrimde yeni frontier bulur.
+                # Ara boşlukta direct_explore aktif olsun ki robot beklemeden devam etsin.
+                self._enable_direct_explore("frontier tamamlandı")
             else:
+                self.get_logger().warn(f"Nav2 hedefi başarısız (status={status})")
                 self._blacklist_active_goal()
-                self._enable_direct_explore("Nav2 hedefi tamamlanmadı")
-        except Exception:
+                self._enable_direct_explore("Nav2 hedefi başarısız")
+        except Exception as exc:
+            self.get_logger().error(f"Nav2 sonuç hatası: {exc}")
             self._blacklist_active_goal()
-            self._enable_direct_explore("Nav2 hedef sonucu alınamadı")
+            self._enable_direct_explore("Nav2 sonuç hatası")
         self._goal_handle = None
         self._active_goal = None
-        self._goal_sent_at = 0.0   # hemen bir sonraki frontier'ı ara
+        self._goal_sent_at = 0.0
 
     def _cancel_goal(self) -> None:
         if self._goal_handle is not None:
@@ -673,11 +760,34 @@ class SlamManagerNode(Node):
             self._pub_status(f"Fallback keşif: {reason}")
         self._direct_explore_active = True
 
+    def _choose_turn_sign(self) -> float:
+        """360° scan'den en açık yönü belirle, ön 180°'ye öncelik ver."""
+        # _best_escape_angle: 360° analiz + ön bonus → en güvenilir yön
+        if abs(self._best_escape_angle) > 0.08:
+            return 1.0 if self._best_escape_angle > 0.0 else -1.0
+        # Fallback: basit sol/sağ kıyası
+        if self._left_clearance > self._right_clearance + 0.10:
+            return 1.0
+        if self._right_clearance > self._left_clearance + 0.10:
+            return -1.0
+        return -1.0
+
+    def _apply_velocity_smoothing(self, cmd: Twist, emergency: bool) -> Twist:
+        a = 0.85 if emergency else self._SMOOTH_ALPHA
+        self._smooth_vx = a * cmd.linear.x + (1.0 - a) * self._smooth_vx
+        self._smooth_vy = a * cmd.linear.y + (1.0 - a) * self._smooth_vy
+        self._smooth_wz = a * cmd.angular.z + (1.0 - a) * self._smooth_wz
+        cmd.linear.x = self._smooth_vx
+        cmd.linear.y = self._smooth_vy
+        cmd.angular.z = self._smooth_wz
+        return cmd
+
     def _direct_explore_tick(self) -> None:
         if not (self._direct_fallback_enabled and self._direct_explore_active):
             return
         if not (self._exploring and self._autonomous):
             self._direct_explore_active = False
+            self._escape_turn_sign = 0.0
             self._publish_zero()
             return
 
@@ -689,101 +799,54 @@ class SlamManagerNode(Node):
         too_narrow   = narrow_left and narrow_right
         back_blocked = self._back_obstacle_distance < 0.30
 
-        # ── P-kontrolcü: açı filtresi (hızlı güncelleme) ────────────────────────
-        self._smooth_angle = 0.70 * self._best_open_angle + 0.30 * self._smooth_angle
-        error = self._smooth_angle
+        in_trouble = front_escape or too_narrow
 
-        # ── Kaçış yön kilidi (sadece gerçek acil durumda) ─────────────────────
-        # Yalnızca front_escape veya too_narrow'da kilitle.
-        # Stop zone'da P-kontrolcü serbest çalışır — sallanma önlenir.
-        if front_escape or too_narrow:
+        if in_trouble:
+            # ── Sensor-driven escape ───────────────────────────────────────────
+            # Yön kilidi: trouble başladığında seç, tamamen çıkana kadar tut.
+            # Her tick yeniden seçmek → sallanma yaratır.
             if self._escape_turn_sign == 0.0:
-                if self._left_clearance > self._right_clearance + 0.15:
-                    self._escape_turn_sign = 1.0
-                else:
-                    self._escape_turn_sign = -1.0
+                self._escape_turn_sign = self._choose_turn_sign()
             sign = self._escape_turn_sign
+
+            if back_blocked:
+                # Arkası da kapalı — yerinde dön, geri gidemez
+                cmd.angular.z = sign * self._direct_turn_speed
+                self.get_logger().warn(
+                    f"Ön+arka kapalı (ön={front_dist:.2f}m); yerinde dön",
+                    throttle_duration_sec=1.0)
+            else:
+                # Geri git + dön — sensörler temiz diyene kadar devam et
+                cmd.linear.x  = -self._direct_backup_speed
+                cmd.angular.z = sign * self._direct_turn_speed
+                self.get_logger().warn(
+                    f"Engel kaçışı (ön={front_dist:.2f}m "
+                    f"sol={self._left_clearance:.2f} sağ={self._right_clearance:.2f}); "
+                    f"geri+{'sol' if sign > 0 else 'sağ'}",
+                    throttle_duration_sec=1.0)
         else:
+            # ── Serbest sürüş ─────────────────────────────────────────────────
+            # Kaçış kilidi sıfırla — yön tekrar P-kontrolcüye bırakılır.
             self._escape_turn_sign = 0.0
-            sign = 1.0 if error >= 0.0 else -1.0
 
-        def locked_turn(min_speed: float) -> float:
-            return sign * max(abs(error) * self._direct_kp, min_speed)
+            self._smooth_angle = 0.70 * self._best_open_angle + 0.30 * self._smooth_angle
+            error = self._smooth_angle
 
-        # ── Acil kaçış (gerçek tehlike: < escape_distance veya çok dar) ───────
-        if front_escape and too_narrow and back_blocked:
-            spin = 1.0 if self._left_clearance > self._right_clearance + 0.10 else -1.0
-            cmd.angular.z = spin * self._direct_turn_speed
-            self.get_logger().warn(
-                f"4 taraf kapalı (sol={self._left_clearance:.2f} sağ={self._right_clearance:.2f})",
-                throttle_duration_sec=1.0)
-
-        elif front_escape and too_narrow:
-            cmd.linear.x  = -self._direct_backup_speed
-            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
-            cmd.angular.z = locked_turn(self._direct_turn_speed)
-            self.get_logger().warn(
-                f"3 taraf kapalı (ön={front_dist:.2f}m)", throttle_duration_sec=1.0)
-
-        elif front_escape and back_blocked:
-            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
-            cmd.angular.z = locked_turn(0.50)
-            self.get_logger().warn("Ön+arka kapalı; yan kaç", throttle_duration_sec=1.0)
-
-        elif front_escape:
-            cmd.linear.x  = -self._direct_backup_speed
-            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
-            cmd.angular.z = locked_turn(0.50)
-            self.get_logger().warn(
-                f"Ön engel ({front_dist:.2f}m); geri+dön", throttle_duration_sec=1.0)
-
-        elif too_narrow and back_blocked:
-            cmd.angular.z = locked_turn(self._direct_turn_speed)
-            self.get_logger().warn("Dar+arka; yerinde dön", throttle_duration_sec=1.0)
-
-        elif too_narrow:
-            cmd.linear.x  = -0.4 * self._direct_backup_speed
-            cmd.linear.y  = -self._strafe_h * sign * self._direct_strafe_speed
-            cmd.angular.z = locked_turn(self._direct_turn_speed)
-            self.get_logger().warn(
-                f"Dar koridor (L={self._side_left_clearance:.2f} R={self._side_right_clearance:.2f})",
-                throttle_duration_sec=1.0)
-
-        else:
-            # ── Sürekli sürüş: robot HİÇBİR ZAMAN DURMUYOR ───────────────────
-            # Hız, engel mesafesine göre orantılı azalır.
-            # Stop zone'da sıfır hız yok — minimum %8 hız her zaman korunur.
             if front_dist >= self._direct_stop_distance:
                 fwd_scale = 1.0
-                wz_gain   = 0.50   # geniş yolda hafif düzeltme
+                wz_gain   = 0.50
             else:
-                # Stop ile escape arasında: hızı azalt, dönüşü artır
                 ratio = max(0.0, (front_dist - self._direct_escape_distance)
                                  / (self._direct_stop_distance - self._direct_escape_distance))
-                fwd_scale = max(0.08, ratio * 0.45)   # min %8, max %45 hız
-                wz_gain   = 0.95   # engele yakınken güçlü yön düzeltmesi
+                fwd_scale = max(0.08, ratio * 0.45)
+                wz_gain   = 0.95
 
             cmd.linear.x  = self._direct_speed * fwd_scale
             cmd.angular.z = max(-self._direct_turn_speed,
                                 min(self._direct_turn_speed,
                                     self._direct_kp * wz_gain * error))
 
-            # Mecanum yan hizalama: koridor ortasında tut.
-            if self._side_left_clearance < 0.55 or self._side_right_clearance < 0.55:
-                side_err = self._side_left_clearance - self._side_right_clearance
-                cmd.linear.y = max(-self._direct_strafe_speed,
-                                   min(self._direct_strafe_speed,
-                                       -self._strafe_h * 0.8 * side_err))
-
-        # ── Exponential smoothing ─────────────────────────────────────────────
-        in_emergency = front_escape or too_narrow or back_blocked
-        a = 0.85 if in_emergency else self._SMOOTH_ALPHA
-        self._smooth_vx = a * cmd.linear.x  + (1.0 - a) * self._smooth_vx
-        self._smooth_vy = a * cmd.linear.y  + (1.0 - a) * self._smooth_vy
-        self._smooth_wz = a * cmd.angular.z + (1.0 - a) * self._smooth_wz
-        cmd.linear.x  = self._smooth_vx
-        cmd.linear.y  = self._smooth_vy
-        cmd.angular.z = self._smooth_wz
+        cmd = self._apply_velocity_smoothing(cmd, emergency=in_trouble)
         self._cmd_pub.publish(cmd)
 
     def _publish_zero(self) -> None:
