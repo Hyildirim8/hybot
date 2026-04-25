@@ -80,7 +80,7 @@
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     direct_explore_speed: 1.00
-    direct_explore_turn_speed: 1.00
+    direct_explore_turn_speed: 0.55      # yavaş dönüş → mecanum yaw odometrisi daha doğru → SLAM duvarı doğru yere koyar
     direct_explore_backup_speed: 0.45
     direct_explore_strafe_speed: 0.30
     direct_explore_kp: 1.5           # P-kontrolcü kazancı — yükseltildi (1.2→1.5) daha hızlı dönüş
