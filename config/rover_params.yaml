@@ -56,11 +56,11 @@
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
     enable_scan_safety_in_auto: false # Nav2 handles avoidance; emergency stop below overrides
-    auto_emergency_stop_distance: 0.30 # AUTO modda acil dur: önde <30cm (insan/dinamik engel)
+    auto_emergency_stop_distance: 0.18 # AUTO modda acil dur: sadece gerçekten çok yakın engelde
     scan_topic: "/scan"
-    front_obstacle_stop_distance: 0.45 # stop if obstacle within 45 cm directly ahead
-    front_obstacle_clear_distance: 0.65
-    front_obstacle_angle_deg: 45.0    # only check a narrow ±22.5° cone ahead, not side walls
+    front_obstacle_stop_distance: 0.25 # daha önce çok erken kesiyordu; duvar/raf yakınında sürüşü bozuyordu
+    front_obstacle_clear_distance: 0.35
+    front_obstacle_angle_deg: 28.0    # yan duvarları "ön engel" sanmamak için daha dar koni
     avoidance_turn_speed: 0.35
     avoidance_strafe_speed: 0.25
 
@@ -79,17 +79,34 @@
     explore_interval_s: 1.5        # saniye — frontier güncelleme periyodu
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
-    direct_explore_speed: 1.00
-    direct_explore_turn_speed: 0.55      # yavaş dönüş → mecanum yaw odometrisi daha doğru → SLAM duvarı doğru yere koyar
-    direct_explore_backup_speed: 0.45
-    direct_explore_strafe_speed: 0.30
-    direct_explore_kp: 1.5           # P-kontrolcü kazancı — yükseltildi (1.2→1.5) daha hızlı dönüş
+    # Direct exploration fallback should be quicker than before, but still
+    # gentler than full-speed teleop so SLAM does not smear corridor corners.
+    direct_explore_speed: 0.50
+    direct_explore_turn_speed: 0.40
+    direct_explore_backup_speed: 0.22
+    direct_explore_strafe_speed: 0.38
+    direct_explore_kp: 1.10
     direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°) — sadece önü değerlendir
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
     min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
     direct_explore_stop_distance: 0.42  # robota yakın dur — 70cm çok erken, sallanma yapıyordu
     direct_explore_escape_distance: 0.28 # geri kaç mesafesi — escape ve stop arası boşluk küçük
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
+
+    # ── wheel_bridge (motor wiring + odometry alignment) ───────────────────
+    # Keep motor command correction for FL/RL, but do not mirror it onto
+    # encoder state because firmware calibration already fixes encoder sign.
+    command_direction_signs: [-1.0, 1.0, -1.0, 1.0]
+    state_direction_signs: [1.0, 1.0, 1.0, 1.0]
+    command_deadband_rad_s: 0.12
+    # Real rover is moving less than odom/RViz reports, especially in yaw.
+    # Scale encoder-derived odom before ros2_control integrates it.
+    odom_linear_scale: 0.50
+    odom_lateral_scale: 0.00
+    odom_angular_scale: 0.14
+    odom_linear_deadband: 0.02
+    odom_lateral_deadband: 0.08
+    odom_angular_deadband: 0.05
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
     # Two distinct watchdogs — do not conflate them.

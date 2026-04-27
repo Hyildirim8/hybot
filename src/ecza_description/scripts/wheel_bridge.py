@@ -36,10 +36,14 @@ import time
 
 JOINT_NAMES = ["fl_wheel_joint", "fr_wheel_joint", "rl_wheel_joint", "rr_wheel_joint"]
 
-# Per-wheel direction correction from interactive single-wheel testimony:
-# slot0->FL was inverted, slot1->FR correct, slot2->RL inverted, slot3->RR correct.
-# Apply to both command and state so control/odometry remain consistent.
-WHEEL_DIR_SIGN = [-1.0, 1.0, -1.0, 1.0]
+# Legacy motor wiring correction for commands:
+# FL/RL motor channels were wired opposite to the controller's positive direction.
+# Keep this correction on the command path so the rover still drives correctly.
+DEFAULT_COMMAND_DIR_SIGN = [-1.0, 1.0, -1.0, 1.0]
+
+# Encoder sign is now corrected in firmware calibration, so state should pass
+# through unchanged by default. This keeps /odom and RViz aligned with reality.
+DEFAULT_STATE_DIR_SIGN = [1.0, 1.0, 1.0, 1.0]
 
 # Seconds without real ESP32 data before state is considered stale
 ESP32_TIMEOUT = 1.0
@@ -48,15 +52,13 @@ ESP32_TIMEOUT = 1.0
 # Must be shorter than the firmware watchdog timeout (1000 ms) so zeros arrive
 # before the watchdog fires when the joystick goes idle.
 CMD_HOLD_TIMEOUT = 0.4
-# 25 Hz: 40 ms period gives comfortable margin below the 1000 ms watchdog while
-# keeping USB CDC-ACM / XRCE load low.  RELIABLE QoS depth=1 guarantees each
-# message is delivered without accumulating a retransmit backlog.
-CMD_PUB_RATE_HZ = 25.0
+# 40 Hz keeps command latency low enough for Nav2 to feel responsive while
+# remaining comfortably under the firmware watchdog window.
+CMD_PUB_RATE_HZ = 40.0
 
-# Clamp small per-wheel commands produced by kinematics/controller noise.
-# This preserves intended pure diagonal/arc patterns by forcing near-zero
-# wheel commands to exactly zero before they reach firmware.
-CMD_DEADBAND_RAD_S = 0.45
+# Clamp only tiny per-wheel commands produced by noise. The previous threshold
+# was large enough to make low-speed Nav2 motion feel sluggish.
+CMD_DEADBAND_RAD_S = 0.12
 
 # QoS to match topic_based_ros2_control (RELIABLE) and ESP32 micro-ROS (BEST_EFFORT)
 reliable_qos = QoSProfile(
@@ -86,11 +88,50 @@ class WheelBridge(Node):
         # This keeps RViz/odometry aligned with real encoder feedback.
         self.declare_parameter("loopback_without_esp32", False)
         self.declare_parameter("command_deadband_rad_s", CMD_DEADBAND_RAD_S)
+        self.declare_parameter("command_direction_signs", DEFAULT_COMMAND_DIR_SIGN)
+        self.declare_parameter("state_direction_signs", DEFAULT_STATE_DIR_SIGN)
+        self.declare_parameter("wheel_radius", 0.08)
+        self.declare_parameter("wheel_base", 0.38)
+        self.declare_parameter("wheel_separation_width", 0.26)
+        self.declare_parameter("odom_linear_scale", 1.0)
+        self.declare_parameter("odom_lateral_scale", 1.0)
+        self.declare_parameter("odom_angular_scale", 1.0)
+        self.declare_parameter("odom_linear_deadband", 0.0)
+        self.declare_parameter("odom_lateral_deadband", 0.0)
+        self.declare_parameter("odom_angular_deadband", 0.0)
         self._loopback_without_esp32 = bool(
             self.get_parameter("loopback_without_esp32").value
         )
         self._command_deadband = float(
             self.get_parameter("command_deadband_rad_s").value
+        )
+        self._command_dir_signs = self._normalise_signs(
+            self.get_parameter("command_direction_signs").value,
+            DEFAULT_COMMAND_DIR_SIGN,
+        )
+        self._state_dir_signs = self._normalise_signs(
+            self.get_parameter("state_direction_signs").value,
+            DEFAULT_STATE_DIR_SIGN,
+        )
+        self._wheel_radius = float(self.get_parameter("wheel_radius").value)
+        self._wheel_base = float(self.get_parameter("wheel_base").value)
+        self._wheel_separation_width = float(
+            self.get_parameter("wheel_separation_width").value
+        )
+        self._odom_linear_scale = float(self.get_parameter("odom_linear_scale").value)
+        self._odom_lateral_scale = float(self.get_parameter("odom_lateral_scale").value)
+        self._odom_angular_scale = float(self.get_parameter("odom_angular_scale").value)
+        self._odom_linear_deadband = float(
+            self.get_parameter("odom_linear_deadband").value
+        )
+        self._odom_lateral_deadband = float(
+            self.get_parameter("odom_lateral_deadband").value
+        )
+        self._odom_angular_deadband = float(
+            self.get_parameter("odom_angular_deadband").value
+        )
+        self._kinematic_k = (
+            (self._wheel_base / 2.0) + (self._wheel_separation_width / 2.0)
         )
 
         # Timestamp of last real ESP32 state message (for loopback fallback)
@@ -130,6 +171,22 @@ class WheelBridge(Node):
 
         self.get_logger().info("wheel_bridge ready")
 
+    @staticmethod
+    def _normalise_signs(value, fallback: list[float]) -> list[float]:
+        signs = []
+        if isinstance(value, (list, tuple)):
+            raw = list(value)
+        else:
+            raw = []
+
+        for index, default in enumerate(fallback):
+            try:
+                item = float(raw[index])
+            except (IndexError, TypeError, ValueError):
+                item = default
+            signs.append(-1.0 if item < 0.0 else 1.0)
+        return signs
+
     def _make_joint_state(self, velocities: list) -> JointState:
         js = JointState()
         js.header.stamp = self.get_clock().now().to_msg()
@@ -148,7 +205,7 @@ class WheelBridge(Node):
         velocities = [float(vel_map.get(name, 0.0)) for name in JOINT_NAMES]
 
         velocities = [
-            velocities[i] * WHEEL_DIR_SIGN[i]
+            velocities[i] * self._command_dir_signs[i]
             for i in range(4)
         ]
 
@@ -186,15 +243,46 @@ class WheelBridge(Node):
             self._last_cmd = [0.0, 0.0, 0.0, 0.0]
             self._publish_f32(self._last_cmd)
 
+    def _scale_state_for_odometry(self, velocities: list[float]) -> list[float]:
+        if self._wheel_radius <= 0.0 or self._kinematic_k <= 0.0:
+            return velocities
+
+        fl, fr, rl, rr = velocities
+        r = self._wheel_radius
+        k = self._kinematic_k
+
+        vx = (r / 4.0) * (fl + fr + rl + rr)
+        vy = (r / 4.0) * (fl - fr - rl + rr)
+        wz = (r / (4.0 * k)) * (-fl + fr - rl + rr)
+
+        vx *= self._odom_linear_scale
+        vy *= self._odom_lateral_scale
+        wz *= self._odom_angular_scale
+
+        if abs(vx) < self._odom_linear_deadband:
+            vx = 0.0
+        if abs(vy) < self._odom_lateral_deadband:
+            vy = 0.0
+        if abs(wz) < self._odom_angular_deadband:
+            wz = 0.0
+
+        return [
+            (vx + vy - (k * wz)) / r,
+            (vx - vy + (k * wz)) / r,
+            (vx - vy - (k * wz)) / r,
+            (vx + vy + (k * wz)) / r,
+        ]
+
     def _on_state(self, msg: Float32MultiArray) -> None:
         """Convert Float32MultiArray wheel velocities → JointState for ros2_control."""
         self._last_esp32_time = time.monotonic()
         data = list(msg.data) if msg.data else []
         data = (data + [0.0] * 4)[:4]
         data = [
-            data[i] * WHEEL_DIR_SIGN[i]
+            data[i] * self._state_dir_signs[i]
             for i in range(4)
         ]
+        data = self._scale_state_for_odometry(data)
         self._state_pub.publish(self._make_joint_state(data))
 
 

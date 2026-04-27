@@ -761,15 +761,16 @@ class SlamManagerNode(Node):
         self._direct_explore_active = True
 
     def _choose_turn_sign(self) -> float:
-        """360° scan'den en açık yönü belirle, ön 180°'ye öncelik ver."""
-        # _best_escape_angle: 360° analiz + ön bonus → en güvenilir yön
-        if abs(self._best_escape_angle) > 0.08:
-            return 1.0 if self._best_escape_angle > 0.0 else -1.0
-        # Fallback: basit sol/sağ kıyası
-        if self._left_clearance > self._right_clearance + 0.10:
-            return 1.0
-        if self._right_clearance > self._left_clearance + 0.10:
-            return -1.0
+        """Kaçış yönünü belirle: sol/sağ açıklık karşılaştırması (0°–120° sektörler)."""
+        left  = self._left_clearance  if math.isfinite(self._left_clearance)  else 10.0
+        right = self._right_clearance if math.isfinite(self._right_clearance) else 10.0
+        if left > right + 0.15:
+            return 1.0    # sol açık → sola dön (CCW, +angular.z)
+        if right > left + 0.15:
+            return -1.0   # sağ açık → sağa dön (CW, -angular.z)
+        # Fark az: P-kontrolcünün sektör analizine bak (±70°)
+        if abs(self._best_open_angle) > 0.15:
+            return 1.0 if self._best_open_angle > 0.0 else -1.0
         return -1.0
 
     def _apply_velocity_smoothing(self, cmd: Twist, emergency: bool) -> Twist:
@@ -833,18 +834,18 @@ class SlamManagerNode(Node):
             error = self._smooth_angle
 
             if front_dist >= self._direct_stop_distance:
-                fwd_scale = 1.0
-                wz_gain   = 0.50
+                # Açık yol: ileri git + hafif yön düzeltmesi
+                cmd.linear.x  = self._direct_speed
+                cmd.angular.z = max(-self._direct_turn_speed,
+                                    min(self._direct_turn_speed,
+                                        self._direct_kp * 0.50 * error))
             else:
-                ratio = max(0.0, (front_dist - self._direct_escape_distance)
-                                 / (self._direct_stop_distance - self._direct_escape_distance))
-                fwd_scale = max(0.08, ratio * 0.45)
-                wz_gain   = 0.95
-
-            cmd.linear.x  = self._direct_speed * fwd_scale
-            cmd.angular.z = max(-self._direct_turn_speed,
-                                min(self._direct_turn_speed,
-                                    self._direct_kp * wz_gain * error))
+                # Stop zone (escape < front < stop): ileri gitme, sadece dön.
+                # İleri giderse engele yaklaşır ve sıkışır.
+                cmd.linear.x  = 0.0
+                cmd.angular.z = max(-self._direct_turn_speed,
+                                    min(self._direct_turn_speed,
+                                        self._direct_kp * 1.0 * error))
 
         cmd = self._apply_velocity_smoothing(cmd, emergency=in_trouble)
         self._cmd_pub.publish(cmd)

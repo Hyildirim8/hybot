@@ -54,9 +54,11 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             "robot_description": robot_description_content,
             "use_sim_time": use_sim_time,
-            # Publish fixed links on /tf instead of /tf_static for robust
-            # cross-container visibility in the Docker host-network setup.
-            "use_tf_static": False,
+            # Publish fixed links on /tf_static (latched TRANSIENT_LOCAL).
+            # With host networking, /tf_static reaches all containers and is
+            # available at ANY timestamp — eliminates "message filter dropping"
+            # errors when scan timestamps are older than the TF cache.
+            "use_tf_static": True,
         }],
     )
 
@@ -124,6 +126,7 @@ def generate_launch_description() -> LaunchDescription:
         executable="wheel_bridge.py",
         name="wheel_bridge",
         output="screen",
+        parameters=["/config/rover_params.yaml"],
     )
 
     return LaunchDescription([
