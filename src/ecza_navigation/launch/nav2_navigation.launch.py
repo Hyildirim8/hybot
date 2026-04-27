@@ -64,6 +64,11 @@ def generate_launch_description() -> LaunchDescription:
         default_value="false",
         description="Use simulation clock",
     )
+    autostart_arg = DeclareLaunchArgument(
+        "autostart",
+        default_value="true",
+        description="Whether Nav2 lifecycle managers should autostart",
+    )
     params_file_arg = DeclareLaunchArgument(
         "params_file",
         default_value=nav2_params_file,
@@ -73,6 +78,7 @@ def generate_launch_description() -> LaunchDescription:
     mode           = LaunchConfiguration("mode")
     map_yaml       = LaunchConfiguration("map")
     use_sim_time   = LaunchConfiguration("use_sim_time")
+    autostart      = LaunchConfiguration("autostart")
     params_file    = LaunchConfiguration("params_file")
 
     # ── SLAM Toolbox (slam mode only) ─────────────────────────────────────
@@ -101,10 +107,11 @@ def generate_launch_description() -> LaunchDescription:
                     os.path.join(pkg_nav2, "launch", "navigation_launch.py")
                 ),
                 launch_arguments={
-                    "use_sim_time":  use_sim_time,
-                    "params_file":   params_file,
+                    "use_sim_time":    use_sim_time,
+                    "autostart":       autostart,
+                    "params_file":     params_file,
                     "use_composition": "False",
-                    "use_respawn":   "True",
+                    "use_respawn":     "True",
                 }.items(),
             ),
         ],
@@ -121,6 +128,7 @@ def generate_launch_description() -> LaunchDescription:
                 ),
                 launch_arguments={
                     "use_sim_time":  use_sim_time,
+                    "autostart":     autostart,
                     "params_file":   params_file,
                     "map":           map_yaml,
                     "use_composition": "False",
@@ -151,6 +159,7 @@ def generate_launch_description() -> LaunchDescription:
         mode_arg,
         map_arg,
         use_sim_time_arg,
+        autostart_arg,
         params_file_arg,
         log_slam,
         log_nav,

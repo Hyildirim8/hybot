@@ -299,6 +299,7 @@ services:
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./maps:/maps:rw
+      - ./docker/nav2_entrypoint.sh:/nav2_entrypoint.sh:ro
       # Bind-mount güncel config dosyaları — image rebuild gerektirmeden aktif olur
       - ./src/ecza_navigation/config/nav2_params.yaml:/ws/install/share/ecza_navigation/config/nav2_params.yaml:ro
       - ./src/ecza_navigation/config/slam_params.yaml:/ws/install/share/ecza_navigation/config/slam_params.yaml:ro
@@ -306,19 +307,7 @@ services:
       - ./src/ecza_navigation/launch/nav2_navigation.launch.py:/ws/install/share/ecza_navigation/launch/nav2_navigation.launch.py:ro
     command:
       - bash
-      - -c
-      - |
-        MODE=${NAV_MODE:-slam}
-        # Wait for the rest of the stack (hardware, lidar) to register their
-        # ROS2 services before launching Nav2. The lifecycle_manager's internal
-        # get_state service client has a hardcoded 2s timeout; if nodes are
-        # still initialising when it fires, bringup fails. 8s is enough on RPi.
-        sleep 8
-        if [ "$$MODE" = "nav" ] && [ -n "$${MAP:-}" ]; then
-          exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=nav map:=$$MAP
-        else
-          exec ros2 launch ecza_navigation nav2_navigation.launch.py mode:=slam
-        fi
+      - /nav2_entrypoint.sh
     restart: unless-stopped
     depends_on:
       - robot_description
