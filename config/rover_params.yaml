@@ -81,10 +81,10 @@
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.
-    direct_explore_speed: 0.50
-    direct_explore_turn_speed: 0.40
-    direct_explore_backup_speed: 0.22
-    direct_explore_strafe_speed: 0.38
+    direct_explore_speed: 0.70
+    direct_explore_turn_speed: 0.55
+    direct_explore_backup_speed: 0.28
+    direct_explore_strafe_speed: 0.50
     direct_explore_kp: 1.10
     direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°) — sadece önü değerlendir
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
@@ -103,7 +103,7 @@
     # Scale encoder-derived odom before ros2_control integrates it.
     odom_linear_scale: 0.50
     odom_lateral_scale: 0.00
-    odom_angular_scale: 0.14
+    odom_angular_scale: 0.07
     odom_linear_deadband: 0.02
     odom_lateral_deadband: 0.08
     odom_angular_deadband: 0.05
