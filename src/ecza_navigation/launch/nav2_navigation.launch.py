@@ -152,10 +152,10 @@ def generate_launch_description() -> LaunchDescription:
     return LaunchDescription([
         # Increase lifecycle_manager bond_timeout for slow hardware (Raspberry Pi).
         # Default 4.0 s is too tight; Nav2 servers take ~6-8 s to bond on boot.
-        # attempt_respawn_reconnection: reconnect if a managed node briefly
-        # disappears during state transition (race condition on slow hardware).
+        # attempt_respawn_reconnection=False: lifecycle_manager will not try to
+        # reconnect bonds after a crash; nav2_entrypoint.sh handles bringup.
         SetParameter(name="bond_timeout", value=10.0),
-        SetParameter(name="attempt_respawn_reconnection", value=True),
+        SetParameter(name="attempt_respawn_reconnection", value=False),
         mode_arg,
         map_arg,
         use_sim_time_arg,
