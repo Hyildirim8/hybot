@@ -17,7 +17,7 @@
     #       config/controllers.yaml for mecanum_drive_controller — keep in sync.
     wheel_separation_width: 0.26   # metres — left/right wheel centre distance
     wheel_base: 0.38               # metres — front/rear axle centre distance
-    wheel_radius: 0.08             # metres — measure physical wheel and update
+    wheel_radius: 0.04             # metres — 80 mm diameter mecanum wheel
 
     # ── Speed limits ──────────────────────────────────────────────────────────
     max_linear_speed: 1.5          # m/s — maximum translational speed
@@ -46,6 +46,7 @@
     btn_strafe_left: 6             # LT — instant full-speed strafe left
     btn_strafe_right: 7            # RT — instant full-speed strafe right
     strafe_invert: false           # true → sağ/sol yönleri ters çevir (D-pad/LT/RT ters ise true yap)
+    auto_strafe_invert: true       # Nav2 ROS +Y=sol üretir; rover donanımında +Y=sağ kabul ediliyor
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
     btn_auto_mode_alt: 8           # Back — alternate toggle if Start is not mapped as expected
     btn_auto_mode_candidates: [9, 8] # accept either Start or Back for TELEOP <-> AUTO
@@ -58,8 +59,8 @@
     enable_scan_safety_in_auto: false # Nav2 handles avoidance; emergency stop below overrides
     auto_emergency_stop_distance: 0.18 # AUTO modda acil dur: sadece gerçekten çok yakın engelde
     scan_topic: "/scan"
-    front_obstacle_stop_distance: 0.25 # daha önce çok erken kesiyordu; duvar/raf yakınında sürüşü bozuyordu
-    front_obstacle_clear_distance: 0.35
+    front_obstacle_stop_distance: 0.32 # ince engel tamponu artırıldı
+    front_obstacle_clear_distance: 0.45
     front_obstacle_angle_deg: 28.0    # yan duvarları "ön engel" sanmamak için daha dar koni
     avoidance_turn_speed: 0.35
     avoidance_strafe_speed: 0.25
@@ -69,6 +70,7 @@
     #   0=X  1=A  2=B  3=Y  4=LB  5=RB  6=LT  7=RT  8=Back  9=Start  10=L3  11=R3
     btn_save_map: 3                # Y — mevcut SLAM haritasını /maps/ dizinine kaydet
     btn_explore_toggle: 1          # A — otonom frontier keşfini aç/kapat
+    btn_reset_pose: 10             # L3 — AMCL poz sıfırlama (/initialpose yayınla)
     btn_debounce_ms: 150           # buton sıçramasını önle
     map_save_dir: "/maps"          # kayıt dizini (navigation container'daki bağlama)
     frontier_min_cells: 8          # küçük frontier kümelerini görmezden gel
@@ -88,21 +90,22 @@
     direct_explore_kp: 1.10
     direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°) — sadece önü değerlendir
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
-    min_side_clearance_m: 0.22          # dar koridor: her iki yan < 0.22m → çok dar
-    direct_explore_stop_distance: 0.42  # robota yakın dur — 70cm çok erken, sallanma yapıyordu
-    direct_explore_escape_distance: 0.28 # geri kaç mesafesi — escape ve stop arası boşluk küçük
+    min_side_clearance_m: 0.15          # dar koridor: her iki yan < 0.15m → çok dar
+    direct_explore_stop_distance: 0.55  # ince engeller için daha geniş tampon
+    direct_explore_escape_distance: 0.36 # kaçış mesafesi (stop ile arası yeterli kaldı)
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone, not 180°
 
     # ── wheel_bridge (motor wiring + odometry alignment) ───────────────────
-    # Keep motor command correction for FL/RL, but do not mirror it onto
-    # encoder state because firmware calibration already fixes encoder sign.
+    # FL/RL motor channels are inverted on the command path. Encoder state is
+    # already corrected by firmware calibration, so keep it unchanged here;
+    # mirroring command signs onto state makes odometry cancel/rotate in RViz.
     command_direction_signs: [-1.0, 1.0, -1.0, 1.0]
     state_direction_signs: [1.0, 1.0, 1.0, 1.0]
     command_deadband_rad_s: 0.12
     # Real rover is moving less than odom/RViz reports, especially in yaw.
     # Scale encoder-derived odom before ros2_control integrates it.
     odom_linear_scale: 0.50
-    odom_lateral_scale: 0.00
+    odom_lateral_scale: -0.50   # negatif: odom vy'yi ROS konvansiyonuna çevir (+y=sol), RViz sağ/sol düzelir
     odom_angular_scale: 0.07
     odom_linear_deadband: 0.02
     odom_lateral_deadband: 0.08

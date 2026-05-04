@@ -13,7 +13,7 @@
 #   2 — usage error (invalid arguments)
 set -euo pipefail
 
-REQUIRED_SERVICES=(joy teleop kinematics micro-ros-agent diagnostics)
+REQUIRED_SERVICES=(joy teleop robot_description micro-ros-agent diagnostics)
 REQUIRED_TOPICS=(/joy /cmd_vel /wheel_velocities /diagnostics)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,7 +69,7 @@ for item in items:
 
 # ─────────────────────────────────────────────────────────────────────────────
 tier2() {
-    # Executes `ros2 topic list` inside the kinematics container to verify
+    # Executes `ros2 topic list` inside the teleop container to verify
     # that all required topics are active in the ROS2 graph.
     # Also checks for the ESP32 firmware node (informational only).
     #
@@ -83,11 +83,11 @@ tier2() {
     local all_ok=0
 
     local topic_list
-    topic_list=$(docker compose exec -T kinematics \
+    topic_list=$(docker compose exec -T teleop \
         bash -c "source /opt/ros/humble/setup.bash && \
                  source /ws/install/setup.bash 2>/dev/null || true && \
                  ros2 topic list 2>/dev/null") || {
-        echo "ERROR: could not exec into kinematics container" >&2
+        echo "ERROR: could not exec into teleop container" >&2
         exit 1
     }
 
@@ -103,7 +103,7 @@ tier2() {
 
     # ESP32 firmware node check — informational only (does not affect exit code)
     local node_list
-    node_list=$(docker compose exec -T kinematics \
+    node_list=$(docker compose exec -T teleop \
         bash -c "source /opt/ros/humble/setup.bash && \
                  source /ws/install/setup.bash 2>/dev/null || true && \
                  ros2 node list 2>/dev/null") || node_list=""

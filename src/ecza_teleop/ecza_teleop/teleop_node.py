@@ -27,9 +27,10 @@ Parameters (from rover_params.yaml):
   btn_strafe_right      (int, default 7)    — full-speed strafe right (RT)
     btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
     btn_auto_mode_alt     (int, default -1)   — optional alternate toggle button
-    btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
+  btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
     nav_cmd_topic         (str, default /cmd_vel_nav) — Nav2 command topic in AUTO mode
     start_in_autonomous   (bool, default true) — startup in AUTO so first Start enables joystick
+    auto_strafe_invert    (bool, default true) — flip Nav2 lateral commands to rover hardware convention
   max_linear_speed      (float, default 1.5) m/s
   max_angular_speed     (float, default 3.0) rad/s
   joy_deadzone          (float, default 0.05)
@@ -84,6 +85,7 @@ class TeleopNode(Node):
         self.declare_parameter("avoidance_strafe_speed", 0.25)
         self.declare_parameter("lidar_angle_offset_deg", 0.0)
         self.declare_parameter("strafe_invert", False)
+        self.declare_parameter("auto_strafe_invert", True)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -134,6 +136,9 @@ class TeleopNode(Node):
             float(self.get_parameter("lidar_angle_offset_deg").value)
         )
         self._strafe_invert = bool(self.get_parameter("strafe_invert").value)
+        self._auto_strafe_invert = bool(
+            self.get_parameter("auto_strafe_invert").value
+        )
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
         # ── Autonomous mode state ─────────────────────────────────────────
@@ -157,6 +162,9 @@ class TeleopNode(Node):
         self._cmd_pub = self.create_publisher(
             Twist, "/controller_manager/reference_unstamped", best_effort_qos
         )
+        # Keep the standard ROS velocity topic populated for diagnostics, bags,
+        # and host tools while still feeding the ros2_control controller topic.
+        self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", best_effort_qos)
 
         # Latched publisher so new subscribers always get the current mode.
         latched_qos = QoSProfile(
@@ -198,7 +206,9 @@ class TeleopNode(Node):
             f"scan_safety={self._enable_scan_safety}({self._scan_topic}, "
             f"auto={self._enable_scan_safety_in_auto}, "
             f"stop={self._front_stop_distance:.2f}m, clear={self._front_clear_distance:.2f}m, "
-            f"front={math.degrees(self._front_angle_rad):.0f}deg)"
+            f"front={math.degrees(self._front_angle_rad):.0f}deg), "
+            f"strafe_invert={self._strafe_invert}, "
+            f"auto_strafe_invert={self._auto_strafe_invert}"
         )
 
     # ── Helpers ───────────────────────────────────────────────────────────
@@ -354,9 +364,20 @@ class TeleopNode(Node):
             self.get_logger().info(f"Mode → {mode_str}")
         self._prev_auto_btn = auto_btn_now
 
-        # In AUTO mode the joystick is completely muted — Nav2 owns /cmd_vel.
+        # In AUTO mode Nav2 owns the controller, but a held dead-man plus stick
+        # movement is treated as an operator takeover back to TELEOP.
         if self._autonomous:
-            return
+            # 1.5 saniyelik koruma: START'a basıldıktan hemen sonra joystick
+            # inputu hâlâ basılıysa anında TELEOP'a dönmesini önler.
+            since_toggle = now_s - self._last_mode_toggle_time
+            if since_toggle > 1.5 and self._operator_takeover_requested(msg):
+                self._autonomous = False
+                self._last_mode_toggle_time = now_s
+                self._publish_mode()
+                self._publish_zero()
+                self.get_logger().warn("Operator joystick takeover -> TELEOP")
+            else:
+                return
 
         if not self._axes_ready:
             if self._axis_startup_frame_is_invalid(msg):
@@ -411,12 +432,19 @@ class TeleopNode(Node):
         twist.linear.x  = vx
         twist.linear.y  = vy
         twist.angular.z = wz
-        self._cmd_pub.publish(self._apply_scan_safety(twist))
+        self._publish_cmd(self._apply_scan_safety(twist))
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
         # Forward Nav2 velocity commands only while in AUTO mode.
         if self._autonomous:
-            self._cmd_pub.publish(self._apply_scan_safety(msg))
+            cmd = Twist()
+            cmd.linear.x = msg.linear.x
+            cmd.linear.y = -msg.linear.y if self._auto_strafe_invert else msg.linear.y
+            cmd.linear.z = msg.linear.z
+            cmd.angular.x = msg.angular.x
+            cmd.angular.y = msg.angular.y
+            cmd.angular.z = msg.angular.z
+            self._publish_cmd(self._apply_scan_safety(cmd))
 
     def _watchdog_cb(self) -> None:
         # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the
@@ -433,7 +461,29 @@ class TeleopNode(Node):
             self._publish_zero()
 
     def _publish_zero(self) -> None:
-        self._cmd_pub.publish(Twist())
+        self._publish_cmd(Twist())
+
+    def _publish_cmd(self, twist: Twist) -> None:
+        self._cmd_pub.publish(twist)
+        self._cmd_vel_pub.publish(twist)
+
+    def _operator_takeover_requested(self, msg: Joy) -> bool:
+        if self._require_en:
+            enabled = self._button_pressed(msg, self._btn_en) or self._button_pressed(
+                msg, self._btn_en_alt
+            )
+            if not enabled:
+                return False
+
+        active_axes = (
+            abs(self._apply_deadzone(self._raw_axis(msg, self._ax_lx))) > 0.0
+            or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_ly))) > 0.0
+            or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_az))) > 0.0
+        )
+        active_buttons = self._button_pressed(msg, self._btn_sl) or self._button_pressed(
+            msg, self._btn_sr
+        )
+        return active_axes or active_buttons
 
 
 def main(args=None) -> None:
