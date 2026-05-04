@@ -32,7 +32,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 import tf2_ros
 
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import Joy, LaserScan
 from nav2_msgs.srv import SaveMap as Nav2SaveMap
@@ -50,7 +50,9 @@ class SlamManagerNode(Node):
         self.declare_parameter("btn_save_map", 3)          # Y butonu
         self.declare_parameter("btn_explore_toggle", 1)    # A butonu
         self.declare_parameter("btn_reset_explore", 2)     # B butonu — keşfi sıfırla
+        self.declare_parameter("btn_reset_pose", 10)        # L3  — AMCL poz sıfırlama
         self.declare_parameter("btn_debounce_ms", 400)
+        self.declare_parameter("visited_penalty_radius_m", 2.0)  # oda hafızası yarıçapı
         self.declare_parameter("map_save_dir", "/maps")
         self.declare_parameter("frontier_min_cells", 8)    # küçük frontierları atla
         self.declare_parameter("frontier_obstacle_padding_m", 0.35)
@@ -75,10 +77,14 @@ class SlamManagerNode(Node):
         self.declare_parameter("direct_explore_recovery_rotate_time_s", 1.1)
         self.declare_parameter("strafe_invert", False)
 
-        self._btn_save     = self.get_parameter("btn_save_map").value
-        self._btn_explore  = self.get_parameter("btn_explore_toggle").value
-        self._btn_reset    = self.get_parameter("btn_reset_explore").value
-        self._debounce_ms  = self.get_parameter("btn_debounce_ms").value
+        self._btn_save       = self.get_parameter("btn_save_map").value
+        self._btn_explore    = self.get_parameter("btn_explore_toggle").value
+        self._btn_reset      = self.get_parameter("btn_reset_explore").value
+        self._btn_pose_reset = self.get_parameter("btn_reset_pose").value
+        self._debounce_ms    = self.get_parameter("btn_debounce_ms").value
+        self._visited_penalty_radius_sq = (
+            float(self.get_parameter("visited_penalty_radius_m").value) ** 2
+        )
         self._map_dir      = self.get_parameter("map_save_dir").value
         self._min_frontier = self.get_parameter("frontier_min_cells").value
         self._frontier_padding_m = float(
@@ -169,10 +175,14 @@ class SlamManagerNode(Node):
         self._front_obstacle_distance: float = math.inf
         self._left_clearance: float         = math.inf
         self._right_clearance: float        = math.inf
+        self._front_sparse: bool            = False   # dar koni ışınları seyrekse ince engel var
         self._prev_save_btn: bool          = False
         self._prev_explore_btn: bool       = False
         self._prev_reset_btn: bool         = False
-        self._last_btn_t: dict             = {"save": 0.0, "explore": 0.0, "reset": 0.0}
+        self._prev_pose_btn: bool          = False
+        self._last_btn_t: dict             = {"save": 0.0, "explore": 0.0, "reset": 0.0, "pose": 0.0}
+        self._visited_positions: List[Tuple[float, float]] = []
+        self._last_visited_t: float        = 0.0
 
         # ── QoS profilleri ────────────────────────────────────────────────────
         latched = QoSProfile(
@@ -189,7 +199,9 @@ class SlamManagerNode(Node):
         # ── Yayıncılar ────────────────────────────────────────────────────────
         self._status_pub    = self.create_publisher(String, "slam_manager/status", latched)
         self._exploring_pub = self.create_publisher(Bool,   "slam_manager/exploring", latched)
-        self._cmd_pub       = self.create_publisher(Twist,  "/cmd_vel_nav", best_effort)
+        self._cmd_pub          = self.create_publisher(Twist,  "/cmd_vel_nav", best_effort)
+        self._initialpose_pub  = self.create_publisher(
+            PoseWithCovarianceStamped, '/initialpose', latched)
 
         # ── Abonelikler ───────────────────────────────────────────────────────
         self.create_subscription(Joy,          "joy",             self._joy_cb,  10)
@@ -246,6 +258,13 @@ class SlamManagerNode(Node):
             self._reset_exploration()
         self._prev_reset_btn = rst_on
 
+        # L3 butonu → AMCL poz sıfırla (/initialpose)
+        pose_on = self._btn_pose_reset < len(msg.buttons) and bool(msg.buttons[self._btn_pose_reset])
+        if pose_on and not self._prev_pose_btn and (now - self._last_btn_t["pose"]) >= deb:
+            self._last_btn_t["pose"] = now
+            self._reset_pose()
+        self._prev_pose_btn = pose_on
+
     # ── Abonelik geri çağrıları ───────────────────────────────────────────────
 
     def _map_cb(self, msg: OccupancyGrid) -> None:
@@ -283,21 +302,34 @@ class SlamManagerNode(Node):
         _N_ESC   = 36
         esc_min  = [math.inf] * _N_ESC
 
+        # Dar koni (±15°) sayaçları — ince engel (sandalye ayağı vb.) tespiti.
+        # Geçersiz (inf) ışınları da sayabilmek için açıyı erken hesapla.
+        _NARROW_RAD = math.radians(15.0)
+        narrow_total = 0
+        narrow_valid = 0
+
         for i, distance in enumerate(msg.ranges):
-            if not math.isfinite(distance):
-                continue
-            if distance < max(0.0, msg.range_min) or distance > msg.range_max:
-                continue
+            # Açıyı ve shifted'ı erken hesapla — inf ışınlar dahil her şeyi sayabilmek için.
             angle = msg.angle_min + (i * msg.angle_increment)
             angle = math.atan2(math.sin(angle), math.cos(angle))
-
-            # Apply lidar mounting offset: sensor may be rotated relative to base_link.
-            # lidar_angle_offset_deg=180 means sensor faces backward — subtract π so
-            # that sensor angle ±π maps to robot front (angle 0 in shifted frame).
             shifted = math.atan2(
                 math.sin(angle - self._lidar_angle_offset_rad),
                 math.cos(angle - self._lidar_angle_offset_rad),
             )
+
+            # Dar koni sayacı: geçerli ve geçersiz (inf) ışınları say
+            if abs(shifted) <= _NARROW_RAD:
+                narrow_total += 1
+                if (math.isfinite(distance)
+                        and distance >= max(0.0, msg.range_min)
+                        and distance <= msg.range_max):
+                    narrow_valid += 1
+
+            if not math.isfinite(distance):
+                continue
+            if distance < max(0.0, msg.range_min) or distance > msg.range_max:
+                continue
+
             if abs(shifted) <= half_angle:
                 front = min(front, float(distance))
 
@@ -332,6 +364,15 @@ class SlamManagerNode(Node):
             shifted_360 = math.degrees(shifted) % 360.0
             esc_idx = int(shifted_360 / _ESC_DEG) % _N_ESC
             esc_min[esc_idx] = min(esc_min[esc_idx], float(distance))
+
+        # İnce engel (sandalye ayağı, metal çubuk) tespiti:
+        # Dar konide (±15°) ışınların çoğu inf dönüyorsa yansıyan/geçen ince cisim var.
+        # 0 < narrow_valid < %40: bazı ışınlar çarptı ama çoğu cisimden geçti.
+        # narrow_total >= 20: yeterli örnek (RPLidar A2M12 bu konide ~65 ışın üretir).
+        self._front_sparse = (
+            narrow_total >= 20
+            and 0 < narrow_valid < narrow_total * 0.40
+        )
 
         # En açık sektör: en büyük minimum mesafeye sahip sektör.
         # Sensörü gelmeyen sektör (açık alan) react_distance ile puanlanır.
@@ -387,6 +428,33 @@ class SlamManagerNode(Node):
         self._side_left_clearance = side_left
         self._side_right_clearance = side_right
         self._back_obstacle_distance = back
+
+    # ── Poz sıfırlama (AMCL /initialpose) ───────────────────────────────────
+
+    def _reset_pose(self) -> None:
+        """L3: mevcut TF konumunu /initialpose olarak yayınla (AMCL parçacık filtresi sıfırla)."""
+        pose_msg = PoseWithCovarianceStamped()
+        pose_msg.header.frame_id = 'map'
+        pose_msg.header.stamp = self.get_clock().now().to_msg()
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.3),
+            )
+            pose_msg.pose.pose.position.x = tf.transform.translation.x
+            pose_msg.pose.pose.position.y = tf.transform.translation.y
+            pose_msg.pose.pose.orientation = tf.transform.rotation
+            info = f"({tf.transform.translation.x:.2f}, {tf.transform.translation.y:.2f})"
+        except Exception:
+            pose_msg.pose.pose.orientation.w = 1.0
+            info = "orijin (TF yok)"
+        # Orta büyüklükte kovaryans: AMCL bu nokta etrafında parçacık yayar
+        pose_msg.pose.covariance[0]  = 0.25   # x
+        pose_msg.pose.covariance[7]  = 0.25   # y
+        pose_msg.pose.covariance[35] = 0.07   # yaw
+        self._initialpose_pub.publish(pose_msg)
+        self.get_logger().info(f"Poz sıfırlandı → {info}")
+        self._pub_status(f"Poz sıfırlandı {info}")
 
     # ── Harita kaydetme ───────────────────────────────────────────────────────
 
@@ -458,10 +526,11 @@ class SlamManagerNode(Node):
     def _reset_exploration(self) -> None:
         """B butonu: kara listeyi temizle, durumu sıfırla, keşfi yeniden başlat."""
         self._failed_goals.clear()
+        self._visited_positions.clear()
+        self._last_visited_t = 0.0
         self._cancel_goal()
         self._direct_explore_active = False
         self._pending_frontier = None
-        self._escape_turn_sign = 0.0
         self._escape_turn_sign = 0.0
         self._smooth_angle = 0.0
         self._smooth_vx = 0.0
@@ -510,6 +579,9 @@ class SlamManagerNode(Node):
             self._direct_explore_active = False
             return
 
+        # Ziyaret edilen konumu periyodik kaydet (oda hafızası için)
+        self._record_visited_position()
+
         # ── 1. Arka plandan frontier hazırsa Nav2 hedefi gönder ─────────────
         if self._pending_frontier is not None:
             frontier = self._pending_frontier
@@ -536,8 +608,9 @@ class SlamManagerNode(Node):
             if snap is not None:
                 with self._frontier_lock:
                     generation = self._frontier_generation
+                visited_snap = list(self._visited_positions)
                 self._frontier_thread = threading.Thread(
-                    target=self._compute_frontier_bg, args=(snap, generation), daemon=True
+                    target=self._compute_frontier_bg, args=(snap, generation, visited_snap), daemon=True
                 )
                 self._frontier_thread.start()
 
@@ -549,9 +622,10 @@ class SlamManagerNode(Node):
             self._frontier_generation += 1
             self._frontier_target_angle = None
 
-    def _compute_frontier_bg(self, map_snap: OccupancyGrid, generation: int) -> None:
+    def _compute_frontier_bg(self, map_snap: OccupancyGrid, generation: int,
+                             visited_snap: List[Tuple[float, float]]) -> None:
         """Arka plan thread: frontier bul, yön açısı hesapla, main thread'e bildir."""
-        frontier = self._pick_frontier_from(map_snap)
+        frontier = self._pick_frontier_from(map_snap, visited_snap)
 
         with self._frontier_lock:
             if generation != self._frontier_generation:
@@ -596,7 +670,28 @@ class SlamManagerNode(Node):
 
     # ── Frontier bulma ────────────────────────────────────────────────────────
 
-    def _pick_frontier_from(self, m: OccupancyGrid) -> Optional[Tuple[float, float]]:
+    def _record_visited_position(self) -> None:
+        """Keşif sırasında robot konumunu 15 saniyede bir ziyaret listesine ekle."""
+        if not (self._exploring and self._autonomous):
+            return
+        now = time.monotonic()
+        if now - self._last_visited_t < 15.0:
+            return
+        try:
+            tf = self._tf_buffer.lookup_transform(
+                'map', 'base_link', rclpy.time.Time(),
+                timeout=rclpy.duration.Duration(seconds=0.05),
+            )
+            pos = (tf.transform.translation.x, tf.transform.translation.y)
+            self._visited_positions.append(pos)
+            if len(self._visited_positions) > 200:
+                self._visited_positions = self._visited_positions[-200:]
+            self._last_visited_t = now
+        except Exception:
+            pass
+
+    def _pick_frontier_from(self, m: OccupancyGrid,
+                            visited: List[Tuple[float, float]] = None) -> Optional[Tuple[float, float]]:
         """
         Verilen harita üzerinde frontier hücrelerini bul, en büyük kümenin
         dünya koordinatlarındaki merkezini döndür.
@@ -670,17 +765,31 @@ class SlamManagerNode(Node):
             cy_i = sum(p[1] for p in cluster) / len(cluster)
             return (ox + cx_i * res, oy + cy_i * res)
 
+        # Ziyaret edilen bölgeler için skoru önceden hesapla (arka plan thread'i, GIL korumalı)
+        visited_sq = self._visited_penalty_radius_sq
+
+        def is_near_visited(wx: float, wy: float) -> bool:
+            if not visited:
+                return False
+            for vx, vy in visited:
+                if (wx - vx) ** 2 + (wy - vy) ** 2 <= visited_sq:
+                    return True
+            return False
+
         candidates = []
         for cluster in valid:
             target = cluster_target(cluster)
             if self._goal_is_blacklisted(target):
                 continue
-            candidates.append((len(cluster), target))
+            score = float(len(cluster))
+            if is_near_visited(target[0], target[1]):
+                score *= 0.4   # ziyaret edilmiş bölgeye 60% ceza → yeni alanları tercih et
+            candidates.append((score, target))
 
         if not candidates:
             return None
 
-        # Büyük frontier tercih edilir; başarısız hedefler kara listeye alınır.
+        # En yüksek skorlu frontier (büyük + ziyaret edilmemiş) tercih edilir.
         candidates.sort(key=lambda item: item[0], reverse=True)
         return candidates[0][1]
 
@@ -793,14 +902,40 @@ class SlamManagerNode(Node):
             return
 
         cmd = Twist()
-        front_dist   = self._front_obstacle_distance
-        front_escape = front_dist <= self._direct_escape_distance
+        front_dist = self._front_obstacle_distance
+
+        # İnce engel (seyrek tarama) tespiti: mesafeye yakınsa durma eşiklerini sıkılaştır.
+        # Sandalye ayağı gibi cisimler lidar ışınlarını sıkça yansıtır/geçirir.
+        _sparse = (self._front_sparse
+                   and front_dist < 1.5 * self._direct_stop_distance)
+        eff_stop   = self._direct_stop_distance   * (1.30 if _sparse else 1.0)
+        eff_escape = self._direct_escape_distance * (1.30 if _sparse else 1.0)
+
+        front_escape = front_dist <= eff_escape
         narrow_left  = self._side_left_clearance < self._min_side_clearance
         narrow_right = self._side_right_clearance < self._min_side_clearance
         too_narrow   = narrow_left and narrow_right
         back_blocked = self._back_obstacle_distance < 0.30
 
         in_trouble = front_escape or too_narrow
+
+        # ── Strafe yönü (mecanum yan hareket) ────────────────────────────────
+        # 50°–90° sektör açıklığı: robot gövdesinin yan duvar mesafesi.
+        # Minimum 0.32 m yoksa o yana kayma — daha az çarpma riski.
+        # ROS convention (+y=sol) kullan: teleop auto_strafe_invert=True bunu
+        # donanım convention'ına (+y=sağ) çevirir — Nav2/DWB ile aynı.
+        _STRAFE_MIN = 0.32
+        side_r = self._side_right_clearance if math.isfinite(self._side_right_clearance) else 10.0
+        side_l = self._side_left_clearance  if math.isfinite(self._side_left_clearance)  else 10.0
+        can_strafe_right = side_r > _STRAFE_MIN
+        can_strafe_left  = side_l > _STRAFE_MIN
+
+        if can_strafe_right and side_r >= side_l:
+            strafe_y = -self._direct_strafe_speed      # ROS: -y = sağ
+        elif can_strafe_left:
+            strafe_y = +self._direct_strafe_speed      # ROS: +y = sol
+        else:
+            strafe_y = 0.0                             # yan yol yok
 
         if in_trouble:
             # ── Sensor-driven escape ───────────────────────────────────────────
@@ -811,19 +946,19 @@ class SlamManagerNode(Node):
             sign = self._escape_turn_sign
 
             if back_blocked:
-                # Arkası da kapalı — yerinde dön, geri gidemez
+                # Arkası da kapalı — yerinde dön + yana kayma ile çıkış dene
                 cmd.angular.z = sign * self._direct_turn_speed
+                cmd.linear.y  = strafe_y
                 self.get_logger().warn(
-                    f"Ön+arka kapalı (ön={front_dist:.2f}m); yerinde dön",
+                    f"Ön+arka kapalı (ön={front_dist:.2f}m); yerinde dön+kayma",
                     throttle_duration_sec=1.0)
             else:
-                # Geri git + dön — sensörler temiz diyene kadar devam et
+                # Geri git düz — rotasyon yok, dairesel hareketi önle.
+                # Ön engel çekilince stop-zone P-kontrolcüsü yön düzeltmesini devralır.
                 cmd.linear.x  = -self._direct_backup_speed
-                cmd.angular.z = sign * self._direct_turn_speed
+                cmd.linear.y  = strafe_y * 0.5
                 self.get_logger().warn(
-                    f"Engel kaçışı (ön={front_dist:.2f}m "
-                    f"sol={self._left_clearance:.2f} sağ={self._right_clearance:.2f}); "
-                    f"geri+{'sol' if sign > 0 else 'sağ'}",
+                    f"Engel kaçışı (ön={front_dist:.2f}m); düz geri",
                     throttle_duration_sec=1.0)
         else:
             # ── Serbest sürüş ─────────────────────────────────────────────────
@@ -833,19 +968,23 @@ class SlamManagerNode(Node):
             self._smooth_angle = 0.70 * self._best_open_angle + 0.30 * self._smooth_angle
             error = self._smooth_angle
 
-            if front_dist >= self._direct_stop_distance:
-                # Açık yol: ileri git + hafif yön düzeltmesi
+            if front_dist >= eff_stop:
+                # Açık yol: ileri git + hafif yön düzeltmesi.
+                # Duvara yakın (< 0.40m yan) → hafif düzeltme kayması.
                 cmd.linear.x  = self._direct_speed
                 cmd.angular.z = max(-self._direct_turn_speed,
                                     min(self._direct_turn_speed,
                                         self._direct_kp * 0.50 * error))
+                if min(side_l, side_r) < 0.40:
+                    cmd.linear.y = strafe_y * 0.35
             else:
-                # Stop zone (escape < front < stop): ileri gitme, sadece dön.
-                # İleri giderse engele yaklaşır ve sıkışır.
+                # Stop zone (eff_escape < front < eff_stop): ileri gitme, dön + tam yana kayma.
+                # Mecanum strafing ile köşe etrafında kaymak dönmeden çok daha hızlı.
                 cmd.linear.x  = 0.0
                 cmd.angular.z = max(-self._direct_turn_speed,
                                     min(self._direct_turn_speed,
                                         self._direct_kp * 1.0 * error))
+                cmd.linear.y  = strafe_y
 
         cmd = self._apply_velocity_smoothing(cmd, emergency=in_trouble)
         self._cmd_pub.publish(cmd)

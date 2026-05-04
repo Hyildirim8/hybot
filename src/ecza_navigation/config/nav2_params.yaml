@@ -146,8 +146,8 @@ controller_server:
       stateful: true
       critics: ["Oscillation", "BaseObstacle", "ObstacleFootprint",
                 "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 4.5
-      ObstacleFootprint.scale: 6.0  # robot gövdesinin duvara yakınlığını cezalandır
+      BaseObstacle.scale: 6.0
+      ObstacleFootprint.scale: 9.0  # ince engellere (sandalye ayağı) daha mesafeli geç
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.2
       GoalAlign.scale: 14.0
@@ -198,8 +198,8 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.25
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.15
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -253,8 +253,8 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 5.0
-        inflation_radius: 0.25
+        cost_scaling_factor: 3.5
+        inflation_radius: 0.15
       always_send_full_costmap: true
 
 map_server:

@@ -93,11 +93,11 @@ if [[ -f "${WS_INSTALL}" ]]; then
   source "${WS_INSTALL}"
 fi
 
-echo "[rviz.sh] ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-42}"
+echo "[rviz.sh] ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}"
 echo "[rviz.sh] use_sim_time=${USE_SIM_TIME}"
 echo "[rviz.sh] config=${RVIZ_CONFIG}"
 
-export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-42}"
+export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
 
 # Launch display.launch.py — starts robot_state_publisher + joint_state_publisher_gui + RViz2
 ros2 launch ecza_description display.launch.py \

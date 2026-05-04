@@ -48,13 +48,13 @@ mecanum_drive_controller:
     rear_right_wheel_state_joint_name:    "rr_wheel_joint"
 
     # ── Rover kinematics ──────────────────────────────────────────────────────
-    # wheels_radius: physical wheel radius in metres (rover_params.yaml: 0.08)
+    # wheels_radius: physical wheel radius in metres (rover_params.yaml: 0.04)
     # sum_of_robot_center_projection_on_X_Y_axis: lx + ly
     #   lx = wheel_base / 2            = 0.38 / 2 = 0.19 m
     #   ly = wheel_separation_width / 2 = 0.26 / 2 = 0.13 m
     #   sum                            = 0.19 + 0.13 = 0.32 m
     kinematics:
-      wheels_radius: 0.08
+      wheels_radius: 0.04
       sum_of_robot_center_projection_on_X_Y_axis: 0.32
 
     # ── Odometry ──────────────────────────────────────────────────────────────

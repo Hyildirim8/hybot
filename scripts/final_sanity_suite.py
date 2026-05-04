@@ -25,6 +25,7 @@ class N(Node):
     def __init__(self):
         super().__init__("final_sanity_suite")
         self.pub = self.create_publisher(Twist, "/controller_manager/reference_unstamped", 10)
+        self.pub_cmd_vel = self.create_publisher(Twist, "/cmd_vel", 10)
         self.enc = []
         self.odom = []
         self.create_subscription(
@@ -47,6 +48,7 @@ def run_case(n, name, tw, sec=2.0):
     st = time.time()
     while time.time() - st < sec:
         n.pub.publish(tw)
+        n.pub_cmd_vel.publish(tw)
         rclpy.spin_once(n, timeout_sec=0.02)
         time.sleep(0.02)
 
@@ -64,6 +66,7 @@ def run_case(n, name, tw, sec=2.0):
     zt = time.time()
     while time.time() - zt < 0.8:
         n.pub.publish(z)
+        n.pub_cmd_vel.publish(z)
         rclpy.spin_once(n, timeout_sec=0.02)
         time.sleep(0.02)
 

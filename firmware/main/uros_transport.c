@@ -20,7 +20,7 @@
 
 #include "esp_log.h"
 #include "esp_task_wdt.h"
-#include "driver/usb_serial_jtag.h"
+#include "esp32s2_usbcdc_transport.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "uxr/client/transport.h"
@@ -36,78 +36,17 @@
 
 static const char *TAG = "uros_transport";
 
-static bool s_usj_installed = false;
-
 /* Allocator must outlive the executor — keep it at file scope.
  * rcl_get_default_allocator() always returns the same function pointers
  * so a single static instance is safe across reconnect cycles.          */
 static rcl_allocator_t s_allocator;
+static tinyusb_cdcacm_itf_t s_cdc_port = TINYUSB_CDC_ACM_0;
 
 /* 009: /calibration_reset service — declared at file scope so it persists
  * across the uros_init call and is valid when the executor spins.       */
 static rcl_service_t                    s_reset_service;
 static std_srvs__srv__Empty_Request     s_reset_request;
 static std_srvs__srv__Empty_Response    s_reset_response;
-
-static bool usj_open(struct uxrCustomTransport *transport)
-{
-    (void)transport;
-
-    if (!s_usj_installed) {
-        usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-        esp_err_t ret = usb_serial_jtag_driver_install(&cfg);
-        if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "usb_serial_jtag_driver_install failed: %s", esp_err_to_name(ret));
-            return false;
-        }
-        s_usj_installed = true;
-    }
-    return true;
-}
-
-static bool usj_close(struct uxrCustomTransport *transport)
-{
-    (void)transport;
-    return true;
-}
-
-static size_t usj_write(struct uxrCustomTransport *transport, const uint8_t *buf,
-                        size_t len, uint8_t *err)
-{
-    (void)transport;
-    int written = usb_serial_jtag_write_bytes(buf, len, pdMS_TO_TICKS(20));
-    if (written < 0) {
-        if (err) *err = 1;
-        return 0;
-    }
-    return (size_t)written;
-}
-
-static size_t usj_read(struct uxrCustomTransport *transport, uint8_t *buf,
-                       size_t len, int timeout, uint8_t *err)
-{
-    (void)transport;
-    TickType_t to_ticks = (timeout > 0) ? pdMS_TO_TICKS(timeout) : 0;
-    int read = usb_serial_jtag_read_bytes(buf, (uint32_t)len, to_ticks);
-    if (read < 0) {
-        if (err) *err = 1;
-        return 0;
-    }
-    return (size_t)read;
-}
-
-void uros_transport_hw_init(void)
-{
-    if (!s_usj_installed) {
-        usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-        esp_err_t ret = usb_serial_jtag_driver_install(&cfg);
-        if (ret == ESP_OK) {
-            s_usj_installed = true;
-        } else {
-            ESP_LOGW(TAG, "boot usj install failed: %s", esp_err_to_name(ret));
-        }
-    }
-}
 
 /* Convenience macro: log and return false on RCL error */
 #define UROS_CHECK(fn, label)                                       \
@@ -131,11 +70,11 @@ bool uros_init(const RoverConfig *cfg,
      * framing=true enables XRCE serial framing (required for serial links). */
     rmw_ret_t rmw_ret = rmw_uros_set_custom_transport(
         true,
-        NULL,
-        usj_open,
-        usj_close,
-        usj_write,
-        usj_read
+        &s_cdc_port,
+        esp32s2_usbcdc_open,
+        esp32s2_usbcdc_close,
+        esp32s2_usbcdc_write,
+        esp32s2_usbcdc_read
     );
 
     if (rmw_ret != RMW_RET_OK) {
