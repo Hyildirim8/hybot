@@ -252,7 +252,7 @@ class WheelBridge(Node):
         k = self._kinematic_k
 
         vx = (r / 4.0) * (fl + fr + rl + rr)
-        vy = (r / 4.0) * (fl - fr - rl + rr)
+        vy = (r / 4.0) * (-fl + fr + rl - rr)
         wz = (r / (4.0 * k)) * (-fl + fr - rl + rr)
 
         vx *= self._odom_linear_scale
@@ -267,10 +267,10 @@ class WheelBridge(Node):
             wz = 0.0
 
         return [
-            (vx + vy - (k * wz)) / r,
-            (vx - vy + (k * wz)) / r,
             (vx - vy - (k * wz)) / r,
             (vx + vy + (k * wz)) / r,
+            (vx + vy - (k * wz)) / r,
+            (vx - vy + (k * wz)) / r,
         ]
 
     def _on_state(self, msg: Float32MultiArray) -> None:

@@ -21,6 +21,7 @@ Parameters (from rover_params.yaml):
   axis_linear_x         (int, default 1)    — stick axis for forward/backward
   axis_linear_y         (int, default 0)    — stick axis for left/right strafe
     axis_angular_z        (int, default 2)    — stick axis for yaw rotation
+    angular_invert        (bool, default false) — flip joystick yaw direction
   enable_button         (int, default 5)    — dead-man button (R1)
   require_enable_button (bool, default false)
   btn_strafe_left       (int, default 6)    — full-speed strafe left  (LT)
@@ -30,7 +31,7 @@ Parameters (from rover_params.yaml):
   btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
     nav_cmd_topic         (str, default /cmd_vel_nav) — Nav2 command topic in AUTO mode
     start_in_autonomous   (bool, default true) — startup in AUTO so first Start enables joystick
-    auto_strafe_invert    (bool, default true) — flip Nav2 lateral commands to rover hardware convention
+    auto_strafe_invert    (bool, default false) — flip AUTO lateral commands only if the rover moves reversed
   max_linear_speed      (float, default 1.5) m/s
   max_angular_speed     (float, default 3.0) rad/s
   joy_deadzone          (float, default 0.05)
@@ -58,6 +59,7 @@ class TeleopNode(Node):
         self.declare_parameter("axis_linear_x", 1)
         self.declare_parameter("axis_linear_y", 0)
         self.declare_parameter("axis_angular_z", 2)
+        self.declare_parameter("angular_invert", False)
         self.declare_parameter("enable_button", 5)
         self.declare_parameter("enable_button_alt", -1)
         self.declare_parameter("require_enable_button", True)
@@ -85,11 +87,12 @@ class TeleopNode(Node):
         self.declare_parameter("avoidance_strafe_speed", 0.25)
         self.declare_parameter("lidar_angle_offset_deg", 0.0)
         self.declare_parameter("strafe_invert", False)
-        self.declare_parameter("auto_strafe_invert", True)
+        self.declare_parameter("auto_strafe_invert", False)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
         self._ax_az = self.get_parameter("axis_angular_z").value
+        self._angular_invert = bool(self.get_parameter("angular_invert").value)
         self._btn_en = self.get_parameter("enable_button").value
         self._btn_en_alt = self.get_parameter("enable_button_alt").value
         self._require_en = self.get_parameter("require_enable_button").value
@@ -208,6 +211,7 @@ class TeleopNode(Node):
             f"stop={self._front_stop_distance:.2f}m, clear={self._front_clear_distance:.2f}m, "
             f"front={math.degrees(self._front_angle_rad):.0f}deg), "
             f"strafe_invert={self._strafe_invert}, "
+            f"angular_invert={self._angular_invert}, "
             f"auto_strafe_invert={self._auto_strafe_invert}"
         )
 
@@ -301,7 +305,10 @@ class TeleopNode(Node):
                 right_clearance = min(right_clearance, float(distance))
 
         self._front_obstacle_distance = min_distance
-        self._front_blocked = min_distance <= self._front_stop_distance
+        if min_distance <= self._front_stop_distance:
+            self._front_blocked = True
+        elif min_distance >= self._front_clear_distance:
+            self._front_blocked = False
         self._left_clearance = left_clearance
         self._right_clearance = right_clearance
 
@@ -425,8 +432,9 @@ class TeleopNode(Node):
             vy_btn += ss * self._max_lin
         vy = max(-self._max_lin, min(self._max_lin, vy_stick + vy_btn))
 
-        # ── Rotation: right stick X — push right → CW → negative wz ─
-        wz = -axis(self._ax_az) * self._max_ang
+        # ── Rotation: right stick X ─────────────────────────────────────
+        angular_sign = 1.0 if self._angular_invert else -1.0
+        wz = angular_sign * axis(self._ax_az) * self._max_ang
 
         twist = Twist()
         twist.linear.x  = vx

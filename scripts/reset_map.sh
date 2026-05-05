@@ -1,30 +1,34 @@
 #!/bin/bash
-# reset_map.sh — SLAM haritasını sıfırla ve navigation container'ı yeniden başlat.
+# reset_map.sh — SLAM haritasını sıfırla.
 #
-# Kullanım:
-#   ./scripts/reset_map.sh          # Haritayı sil + navigation yeniden başlat
-#   ./scripts/reset_map.sh --keep   # Mevcut haritayı koru, sadece yeniden başlat
+# Kullanım (herhangi bir dizinden çalışır):
+#   /home/master/Workspace/ecza-robotu/scripts/reset_map.sh
+#   /home/master/Workspace/ecza-robotu/scripts/reset_map.sh --keep
+#
+# --keep: container'ı yeniden başlat ama mevcut haritayı silme
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="$(dirname "$SCRIPT_DIR")/docker-compose.yaml"
+REPO="/home/master/Workspace/ecza-robotu"
 
 keep_map=false
-if [[ "${1:-}" == "--keep" ]]; then
-    keep_map=true
-fi
+[[ "${1:-}" == "--keep" ]] && keep_map=true
 
-echo "[reset_map] Navigation container durduruluyor..."
-COMPOSE_PROFILES=nav docker compose -f "$COMPOSE_FILE" stop navigation
+cd "$REPO"
+
+echo "[reset_map] Harita sıfırlanıyor..."
+
+docker compose stop navigation 2>&1 | grep -v "^$" || true
 
 if ! "$keep_map"; then
-    echo "[reset_map] Navigation container siliniyor (SLAM durumu temizlenir)..."
-    COMPOSE_PROFILES=nav docker compose -f "$COMPOSE_FILE" rm -f navigation
+    docker compose rm -f navigation 2>&1 | grep -v "^$" || true
+    echo "[reset_map] Eski SLAM verisi temizlendi."
 fi
 
-echo "[reset_map] Navigation container yeniden başlatılıyor..."
-COMPOSE_PROFILES=nav docker compose -f "$COMPOSE_FILE" up -d navigation
+COMPOSE_PROFILES=nav docker compose up -d navigation
 
-echo "[reset_map] Tamamlandı. Nav2 bringup ~60s sürer."
-echo "[reset_map] Durum: docker logs ecza-robotu-navigation-1 -f"
+echo ""
+echo "[reset_map] Navigation yeniden başlatıldı."
+echo "[reset_map] Nav2 bringup ~60 saniye sürer."
+echo "[reset_map] Durum izlemek için:"
+echo "            docker logs -f ecza-robotu-navigation-1"

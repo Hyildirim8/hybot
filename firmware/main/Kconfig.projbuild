@@ -172,39 +172,39 @@ menu "Rover PID Motor Control"
 
     config PID_KP
         int "Proportional gain (×1000)"
-        default 50
+        default 180
         range 0 10000
         help
             Proportional gain for the per-wheel PID velocity controller.
-            Value is divided by 1000 at runtime (e.g. 50 → Kp = 0.050).
+            Value is divided by 1000 at runtime (e.g. 180 → Kp = 0.180).
             Increase for faster response; decrease if motors oscillate.
 
     config PID_KI
         int "Integral gain (×1000)"
-        default 100
+        default 40
         range 0 10000
         help
             Integral gain for the per-wheel PID velocity controller.
-            Value is divided by 1000 at runtime (e.g. 100 → Ki = 0.100).
+            Value is divided by 1000 at runtime (e.g. 40 → Ki = 0.040).
             Eliminates steady-state speed error. Increase slowly;
             too much causes overshoot and windup.
 
     config PID_KD
         int "Derivative gain (×1000)"
-        default 5
+        default 12
         range 0 10000
         help
             Derivative gain for the per-wheel PID velocity controller.
-            Value is divided by 1000 at runtime (e.g. 5 → Kd = 0.005).
+            Value is divided by 1000 at runtime (e.g. 12 → Kd = 0.012).
             Dampens overshoot. Usually much smaller than Kp and Ki.
 
     config PID_INTEGRAL_MAX
         int "Integral anti-windup limit (×1000)"
-        default 500
+        default 300
         range 10 5000
         help
             Maximum |integral| accumulation for anti-windup.
-            Value is divided by 1000 at runtime (e.g. 500 → 0.500).
+            Value is divided by 1000 at runtime (e.g. 300 → 0.300).
             Prevents the integral term from growing unbounded when the
             motor cannot reach the target speed (e.g. stall or high load).
 
