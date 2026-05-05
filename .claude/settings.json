@@ -11,7 +11,9 @@
       "Read(//tmp/**)",
       "Bash(docker stats *)",
       "Bash(dmesg)",
-      "Read(//opt/ros/humble/share/nav2_bringup/launch/**)"
+      "Read(//opt/ros/humble/share/nav2_bringup/launch/**)",
+      "Bash(find /opt/ros/humble /usr -name \"mecanum_drive_controller*\" 2>/dev/null | head -10)",
+      "Read(//usr/**)"
     ]
   }
 }
