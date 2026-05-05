@@ -137,9 +137,9 @@ class SlamManagerNode(Node):
         self._recovery_rotate_time = float(
             self.get_parameter("direct_explore_recovery_rotate_time_s").value
         )
-        _strafe_invert = bool(self.get_parameter("strafe_invert").value)
-        # strafe_invert=false → positive vy = RIGHT (hardware), true → positive vy = LEFT (ROS)
-        self._strafe_h = 1.0 if not _strafe_invert else -1.0
+        # slam_manager publishes ROS-convention /cmd_vel_nav (+Y=left).
+        # teleop_node applies auto_strafe_invert once when forwarding to hardware.
+        self._strafe_h = 1.0
 
         # ── Durum ─────────────────────────────────────────────────────────────
         self._exploring: bool              = False
@@ -152,7 +152,6 @@ class SlamManagerNode(Node):
         self._side_right_clearance: float  = math.inf   # 50°–90° sağ taraf
         self._back_obstacle_distance: float = math.inf  # arka mesafe (150°–180°)
         self._escape_turn_sign: float      = 0.0        # kalıcı dönüş yönü (sallanmayı önle)
-        self._escape_turn_set_at: float    = 0.0
         self._frontier_target_angle: Optional[float] = None  # robot frame frontier açısı
         self._best_open_angle: float       = 0.0        # P-kontrolcü hedef açısı (±70°, robot çerçevesi)
         self._best_escape_angle: float     = 0.0        # Kaçış için en açık yön (360°, ön öncelikli)
@@ -160,12 +159,13 @@ class SlamManagerNode(Node):
         self._recovery_active: bool        = False
         self._recovery_started_at: float   = 0.0
         self._recovery_turn_sign: float    = 0.0
-        # Velocity smoothing — exponential low-pass filter (alpha=0.55 at 10 Hz)
+        self._trouble_count: int           = 0    # debounce: 2 ardışık tick gerekir
+        # Velocity smoothing — exponential low-pass filter at 10 Hz
         # Eliminates sharp step-changes in velocity commands; PID-like ramp behaviour.
         self._smooth_vx: float = 0.0
         self._smooth_vy: float = 0.0
         self._smooth_wz: float = 0.0
-        self._SMOOTH_ALPHA: float = 0.55   # lower = smoother, higher = more responsive
+        self._SMOOTH_ALPHA: float = 0.50   # 0.30 çok yavaş ivmeleniyordu → 0.50
         self._failed_goals: List[Tuple[float, float]] = []
         self._direct_explore_active: bool   = False
         self._frontier_lock = threading.Lock()
@@ -278,6 +278,7 @@ class SlamManagerNode(Node):
             self._direct_explore_active = False
             self._invalidate_frontier_target()
             self._escape_turn_sign = 0.0
+            self._recovery_active = False
             self._publish_zero()
 
     def _scan_cb(self, msg: LaserScan) -> None:
@@ -532,6 +533,9 @@ class SlamManagerNode(Node):
         self._direct_explore_active = False
         self._pending_frontier = None
         self._escape_turn_sign = 0.0
+        self._recovery_active = False
+        self._recovery_started_at = 0.0
+        self._recovery_turn_sign = 0.0
         self._smooth_angle = 0.0
         self._smooth_vx = 0.0
         self._smooth_vy = 0.0
@@ -558,6 +562,7 @@ class SlamManagerNode(Node):
             self._pending_frontier = None
             self._invalidate_frontier_target()
             self._escape_turn_sign = 0.0
+            self._recovery_active = False
             self._publish_zero()
 
     def _explore_tick(self) -> None:
@@ -870,7 +875,10 @@ class SlamManagerNode(Node):
         self._direct_explore_active = True
 
     def _choose_turn_sign(self) -> float:
-        """Kaçış yönünü belirle: sol/sağ açıklık karşılaştırması (0°–120° sektörler)."""
+        """Kaçış yönünü belirle: önce 360° açık açı, sonra sol/sağ açıklık."""
+        if abs(self._best_escape_angle) > 0.15:
+            return 1.0 if self._best_escape_angle > 0.0 else -1.0
+
         left  = self._left_clearance  if math.isfinite(self._left_clearance)  else 10.0
         right = self._right_clearance if math.isfinite(self._right_clearance) else 10.0
         if left > right + 0.15:
@@ -881,6 +889,36 @@ class SlamManagerNode(Node):
         if abs(self._best_open_angle) > 0.15:
             return 1.0 if self._best_open_angle > 0.0 else -1.0
         return -1.0
+
+    def _start_recovery(self) -> None:
+        """Kaçış fazını başlat: 360° best_escape_angle ile yön seç, sonra _choose_turn_sign fallback."""
+        self._recovery_active = True
+        self._recovery_started_at = time.monotonic()
+        esc = self._best_escape_angle
+        if abs(esc) > math.radians(10.0):
+            # 360° sektör analizi açık yön buldu — o yöne dön
+            self._recovery_turn_sign = 1.0 if esc > 0.0 else -1.0
+        else:
+            # Açık yön belirsiz — sol/sağ clearance karşılaştırmasına düş
+            self._recovery_turn_sign = self._choose_turn_sign()
+        self._escape_turn_sign = self._recovery_turn_sign
+
+    def _reset_recovery(self) -> None:
+        self._recovery_active = False
+        self._recovery_started_at = 0.0
+        self._recovery_turn_sign = 0.0
+        self._escape_turn_sign = 0.0
+        self._trouble_count = 0
+
+    def _strafe_toward_escape(self, fallback_y: float) -> float:
+        """360° kaçış açısına göre yana kay; uygun değilse normal açıklığı kullan."""
+        if abs(self._best_escape_angle) > math.radians(20.0):
+            side = 1.0 if self._best_escape_angle > 0.0 else -1.0
+            if side > 0.0 and self._side_left_clearance > 0.24:
+                return side * self._direct_strafe_speed * 1.20 * self._strafe_h
+            if side < 0.0 and self._side_right_clearance > 0.24:
+                return side * self._direct_strafe_speed * 1.20 * self._strafe_h
+        return fallback_y
 
     def _apply_velocity_smoothing(self, cmd: Twist, emergency: bool) -> Twist:
         a = 0.85 if emergency else self._SMOOTH_ALPHA
@@ -897,7 +935,7 @@ class SlamManagerNode(Node):
             return
         if not (self._exploring and self._autonomous):
             self._direct_explore_active = False
-            self._escape_turn_sign = 0.0
+            self._reset_recovery()
             self._publish_zero()
             return
 
@@ -915,55 +953,69 @@ class SlamManagerNode(Node):
         narrow_left  = self._side_left_clearance < self._min_side_clearance
         narrow_right = self._side_right_clearance < self._min_side_clearance
         too_narrow   = narrow_left and narrow_right
-        back_blocked = self._back_obstacle_distance < 0.30
+        back_blocked = self._back_obstacle_distance < 0.26
 
-        in_trouble = front_escape or too_narrow
+        # Debounce: tek bir hatalı lidar okuması recovery başlatmasın
+        raw_trouble = front_escape or too_narrow
+        if raw_trouble:
+            self._trouble_count = min(self._trouble_count + 1, 4)
+        else:
+            self._trouble_count = max(self._trouble_count - 1, 0)
+        in_trouble = self._trouble_count >= 2
 
         # ── Strafe yönü (mecanum yan hareket) ────────────────────────────────
         # 50°–90° sektör açıklığı: robot gövdesinin yan duvar mesafesi.
         # Minimum 0.32 m yoksa o yana kayma — daha az çarpma riski.
-        # ROS convention (+y=sol) kullan: teleop auto_strafe_invert=True bunu
-        # donanım convention'ına (+y=sağ) çevirir — Nav2/DWB ile aynı.
-        _STRAFE_MIN = 0.32
+        # ROS convention (+y=sol, -y=sağ). teleop_node gerekirse AUTO
+        # lateral yönünü auto_strafe_invert ile tek noktada çevirir.
+        _STRAFE_MIN = 0.24
         side_r = self._side_right_clearance if math.isfinite(self._side_right_clearance) else 10.0
         side_l = self._side_left_clearance  if math.isfinite(self._side_left_clearance)  else 10.0
         can_strafe_right = side_r > _STRAFE_MIN
         can_strafe_left  = side_l > _STRAFE_MIN
 
         if can_strafe_right and side_r >= side_l:
-            strafe_y = -self._direct_strafe_speed      # ROS: -y = sağ
+            strafe_y = -self._direct_strafe_speed * self._strafe_h
         elif can_strafe_left:
-            strafe_y = +self._direct_strafe_speed      # ROS: +y = sol
+            strafe_y = +self._direct_strafe_speed * self._strafe_h
         else:
             strafe_y = 0.0                             # yan yol yok
 
         if in_trouble:
             # ── Sensor-driven escape ───────────────────────────────────────────
-            # Yön kilidi: trouble başladığında seç, tamamen çıkana kadar tut.
-            # Her tick yeniden seçmek → sallanma yaratır.
-            if self._escape_turn_sign == 0.0:
-                self._escape_turn_sign = self._choose_turn_sign()
-            sign = self._escape_turn_sign
+            # Trouble boyunca recovery fazını yönet: kısa geri çık, sonra 360°
+            # analizinin gösterdiği açık açıya dön/kay. Faz bitince yönü tazele.
+            if not self._recovery_active:
+                self._start_recovery()
+            elapsed = time.monotonic() - self._recovery_started_at
+            cycle_s = self._recovery_backup_time + self._recovery_rotate_time
+            if elapsed > cycle_s:
+                self._start_recovery()
+                elapsed = 0.0
 
-            if back_blocked:
-                # Arkası da kapalı — yerinde dön + yana kayma ile çıkış dene
-                cmd.angular.z = sign * self._direct_turn_speed
-                cmd.linear.y  = strafe_y
+            sign = self._recovery_turn_sign or self._choose_turn_sign()
+            escape_strafe_y = self._strafe_toward_escape(strafe_y)
+
+            if back_blocked or elapsed >= self._recovery_backup_time:
+                # Arkası kapalıysa ya da geri fazı bittiyse: açık açıya dön + yana kay.
+                cmd.angular.z = sign * self._direct_turn_speed * 1.25
+                cmd.linear.y  = escape_strafe_y
+                if not back_blocked:
+                    cmd.linear.x = -self._direct_backup_speed * 0.35
                 self.get_logger().warn(
-                    f"Ön+arka kapalı (ön={front_dist:.2f}m); yerinde dön+kayma",
+                    f"Kaçış dönüşü (ön={front_dist:.2f}m, açı={math.degrees(self._best_escape_angle):.0f}°)",
                     throttle_duration_sec=1.0)
             else:
-                # Geri git düz — rotasyon yok, dairesel hareketi önle.
-                # Ön engel çekilince stop-zone P-kontrolcüsü yön düzeltmesini devralır.
+                # İlk faz: kısa ve kontrollü geri çık, kaçış açısına doğru hafif kay.
                 cmd.linear.x  = -self._direct_backup_speed
-                cmd.linear.y  = strafe_y * 0.5
+                cmd.linear.y  = escape_strafe_y * 0.5
                 self.get_logger().warn(
-                    f"Engel kaçışı (ön={front_dist:.2f}m); düz geri",
+                    f"Engel kaçışı (ön={front_dist:.2f}m); geri+kayma",
                     throttle_duration_sec=1.0)
         else:
             # ── Serbest sürüş ─────────────────────────────────────────────────
-            # Kaçış kilidi sıfırla — yön tekrar P-kontrolcüye bırakılır.
-            self._escape_turn_sign = 0.0
+            # Kaçış fazını sıfırla — yön tekrar P-kontrolcüye bırakılır.
+            self._reset_recovery()
 
             self._smooth_angle = 0.70 * self._best_open_angle + 0.30 * self._smooth_angle
             error = self._smooth_angle

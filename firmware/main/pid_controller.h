@@ -24,16 +24,16 @@
 /* ─── Kconfig defaults (÷1000 scaling for float representation) ──────── */
 
 #ifndef CONFIG_PID_KP
-#define CONFIG_PID_KP   50    /* ÷1000 → 0.050 */
+#define CONFIG_PID_KP   180   /* ÷1000 -> 0.180 */
 #endif
 #ifndef CONFIG_PID_KI
-#define CONFIG_PID_KI   100   /* ÷1000 → 0.100 */
+#define CONFIG_PID_KI   40    /* ÷1000 -> 0.040 */
 #endif
 #ifndef CONFIG_PID_KD
-#define CONFIG_PID_KD   5     /* ÷1000 → 0.005 */
+#define CONFIG_PID_KD   12    /* ÷1000 -> 0.012 */
 #endif
 #ifndef CONFIG_PID_INTEGRAL_MAX
-#define CONFIG_PID_INTEGRAL_MAX   500   /* ÷1000 → 0.500 */
+#define CONFIG_PID_INTEGRAL_MAX   300   /* ÷1000 -> 0.300 */
 #endif
 
 /* ─── PidState ──────────────────────────────────────────────────────────── */
