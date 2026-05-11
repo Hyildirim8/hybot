@@ -259,6 +259,8 @@ services:
     volumes:
       - /dev:/dev
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_lidar/launch/lidar.launch.py:/ws/install/share/ecza_lidar/launch/lidar.launch.py:ro
+      - ./src/ecza_lidar/scripts/scan_restamper.py:/ws/install/lib/ecza_lidar/scan_restamper.py:ro
     command: >
       ros2 launch ecza_lidar lidar.launch.py
     restart: unless-stopped

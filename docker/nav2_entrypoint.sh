@@ -25,10 +25,10 @@ cleanup() {
 
 trap cleanup INT TERM
 
-# Verify a lifecycle get_state service is live by actually calling it.
-# ros2 service list can return stale entries from a previous container.
+# Verify the node is visible in the ROS graph. Lifecycle service calls can hang
+# on stale DDS endpoints on this robot, so keep readiness checks lightweight.
 wait_for_service() {
-    local service_name="$1"
+    local node_name="$1"
     local timeout_s="${2:-120}"
     local waited=0
 
@@ -39,9 +39,8 @@ wait_for_service() {
             return 1
         fi
 
-        if timeout 5 ros2 service call "${service_name}" \
-            lifecycle_msgs/srv/GetState '{}' >/dev/null 2>&1; then
-            echo "[navigation] ${service_name} is live"
+        if timeout -s KILL 5 ros2 node list 2>/dev/null | grep -qx "${node_name}"; then
+            echo "[navigation] ${node_name} node is live"
             return 0
         fi
 
@@ -49,27 +48,27 @@ wait_for_service() {
         waited=$((waited + 3))
     done
 
-    echo "[navigation] timeout waiting for ${service_name}" >&2
+    echo "[navigation] timeout waiting for ${node_name}" >&2
     return 1
 }
 
 wait_for_nav_services() {
-    wait_for_service "/controller_server/get_state" 120 &&
-    wait_for_service "/smoother_server/get_state"   120 &&
-    wait_for_service "/planner_server/get_state"    120 &&
-    wait_for_service "/behavior_server/get_state"   120 &&
-    wait_for_service "/bt_navigator/get_state"      120 &&
-    wait_for_service "/waypoint_follower/get_state" 120 &&
-    wait_for_service "/velocity_smoother/get_state" 120
+    wait_for_service "/controller_server" 120 &&
+    wait_for_service "/smoother_server"   120 &&
+    wait_for_service "/planner_server"    120 &&
+    wait_for_service "/behavior_server"   120 &&
+    wait_for_service "/bt_navigator"      120 &&
+    wait_for_service "/waypoint_follower" 120 &&
+    wait_for_service "/velocity_smoother" 120
 }
 
 wait_for_localization_services() {
-    wait_for_service "/map_server/get_state" 120 &&
-    wait_for_service "/amcl/get_state"       120
+    wait_for_service "/map_server" 120 &&
+    wait_for_service "/amcl"       120
 }
 
-# Call change_state directly on a node — bypasses lifecycle_manager's 3 s timeout.
-# transition IDs: configure=1, cleanup=2, activate=3, deactivate=4, shutdown=6
+# Transition a lifecycle node using the lifecycle CLI. This still bypasses
+# lifecycle_manager's short timeout, but avoids ros2 service call hangs.
 lifecycle_transition() {
     local node="$1"
     local transition_id="$2"
@@ -78,16 +77,14 @@ lifecycle_transition() {
 
     echo "[navigation] ${label} /${node}..."
     local result
-    result=$(timeout "${call_timeout}" ros2 service call \
-        "/${node}/change_state" \
-        lifecycle_msgs/srv/ChangeState \
-        "{transition: {id: ${transition_id}}}" 2>&1) || true
+    result=$(timeout -s KILL "${call_timeout}" ros2 lifecycle set "/${node}" "${label}" 2>&1) || true
 
-    if echo "${result}" | grep -q "success=True"; then
+    if echo "${result}" | grep -qi "Transitioning successful"; then
         echo "[navigation] /${node} ${label} OK"
         return 0
     fi
 
+    echo "${result}" >&2
     echo "[navigation] /${node} ${label} FAILED" >&2
     return 1
 }

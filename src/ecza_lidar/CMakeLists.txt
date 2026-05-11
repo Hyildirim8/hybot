@@ -8,4 +8,9 @@ install(DIRECTORY launch config maps
   OPTIONAL
 )
 
+install(PROGRAMS
+  scripts/scan_restamper.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
