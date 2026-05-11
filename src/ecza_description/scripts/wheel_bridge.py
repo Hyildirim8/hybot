@@ -252,7 +252,9 @@ class WheelBridge(Node):
         k = self._kinematic_k
 
         vx = (r / 4.0) * (fl + fr + rl + rr)
-        vy = (r / 4.0) * (-fl + fr + rl - rr)
+        # Rover command path uses the opposite lateral sign from ROS REP-103.
+        # Flip encoder-derived vy here so /odom and RViz follow ROS (+Y=left).
+        vy = (r / 4.0) * (fl - fr - rl + rr)
         wz = (r / (4.0 * k)) * (-fl + fr - rl + rr)
 
         vx *= self._odom_linear_scale
