@@ -43,25 +43,25 @@
     angular_invert: true           # TELEOP: sağa itince saat yönünde dönmüyorsa true
     enable_button: 5               # RB — dead-man switch
     enable_button_alt: 4           # LB — alternate dead-man for mode compatibility
-    require_enable_button: true    # safety: drive only while RB/LB dead-man is held
-    btn_strafe_left: 7             # LT fiziksel (gamepad LT/RT indeksleri ters rapor ediyor)
-    btn_strafe_right: 6            # RT fiziksel
-    strafe_invert: false           # Bu donanımda +vy = SAĞ (ROS tersine) — ss=+1 ile axis/buton sinyali doğrudan geçmeli
+    require_enable_button: false   # manuel modda RB/LB basmadan sürüş aktif
+    btn_strafe_left: 6             # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
+    btn_strafe_right: 7            # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
+    strafe_invert: true            # manuel strafe: sağ komut gerçek sağ/RViz sağ ile eşleşsin
     auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
-    btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
-    btn_auto_mode_alt: 8           # Back — alternate toggle if Start is not mapped as expected
-    btn_auto_mode_candidates: [9, 8] # accept either Start or Back for TELEOP <-> AUTO
+    btn_auto_mode: -1              # disabled: noisy Start/Back was stealing joystick control
+    btn_auto_mode_alt: -1          # disabled: keep teleop in joystick mode
+    btn_auto_mode_candidates: [-1] # disabled: no alternate TELEOP <-> AUTO toggles
     auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
     nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     reject_extreme_axis_startup: false  # joystick başlangıçta ±1 gönderince bekleme — kapat
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
-    enable_scan_safety_in_auto: false # Nav2 handles avoidance; emergency stop below overrides
-    auto_emergency_stop_distance: 0.18 # AUTO modda acil dur: sadece gerçekten çok yakın engelde
+    enable_scan_safety_in_auto: true  # AUTO'da da önde engel varken ileri komutu kes
+    auto_emergency_stop_distance: 0.28 # AUTO acil dur eşiğini büyüt: ince/ani engelde daha erken kes
     scan_topic: "/scan"
-    front_obstacle_stop_distance: 0.22 # ince engel tamponu
-    front_obstacle_clear_distance: 0.45
+    front_obstacle_stop_distance: 0.30 # AUTO/TELEOP ön tamponu büyüt: çarpıp gaz vermeyi azalt
+    front_obstacle_clear_distance: 0.50
     front_obstacle_angle_deg: 28.0    # yan duvarları "ön engel" sanmamak için daha dar koni
     avoidance_turn_speed: 0.35
     avoidance_strafe_speed: 0.25
@@ -96,22 +96,22 @@
     direct_explore_escape_distance: 0.36 # kaçış mesafesi
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone
     direct_explore_recovery_backup_time_s: 1.1   # recovery faz-1: geri çekil süresi (0.9 → 1.1 daha geniş açılır)
-    direct_explore_recovery_rotate_time_s: 1.5   # recovery faz-2: dönerek çık süresi (1.2 → 1.5 tam dönüş için)
+    direct_explore_recovery_rotate_time_s: 2.5   # recovery faz-2: dönerek çık süresi (2.5 → ~90°+ dönüş için)
 
     # ── wheel_bridge (motor wiring + odometry alignment) ───────────────────
     # command_direction_signs: FL/RL motor channels are wired backwards on the
     # H-bridge (LPWM drives them in reverse). Negate FL and RL commands so all
     # four wheels spin forward when commanded forward.
-    # state_direction_signs: Firmware auto-calibration already corrects encoder
-    # sign per motor; raw encoder feedback arrives with all signs positive for
-    # the calibrated forward direction — pass through unchanged ([1,1,1,1]).
+    # state_direction_signs mirrors the motor wiring correction so ros2_control
+    # sees wheel feedback in the same frame it commands. Without this, RViz
+    # interprets real forward motion as yaw/strafe.
     command_direction_signs: [-1.0, 1.0, -1.0, 1.0]
-    state_direction_signs: [1.0, 1.0, 1.0, 1.0]
+    state_direction_signs: [-1.0, 1.0, -1.0, 1.0]
     command_deadband_rad_s: 0.12
     # Real rover is moving less than odom/RViz reports, especially in yaw.
     # Scale encoder-derived odom before ros2_control integrates it.
     odom_linear_scale: 0.50
-    odom_lateral_scale: 0.0      # devre dışı: FL/RL ters kablolu encoder pattern lateral odom güvenilmez
+    odom_lateral_scale: 0.50     # lateral odom gerçek sağ/sol hareketle aynı yönde kalsın
     odom_angular_scale: 0.85     # 0.50 çok yüksekti → harita bozuluyordu; 0.25 daha güvenli başlangıç
     odom_linear_deadband: 0.02
     odom_lateral_deadband: 0.0

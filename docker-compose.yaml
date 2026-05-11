@@ -62,10 +62,10 @@ services:
         timeout 3 ros2 topic pub /joy sensor_msgs/msg/Joy \
           '{header: {frame_id: "joy"}, axes: [0.0,0.0,0.0,0.0,0.0,0.0], buttons: [0,0,0,0,0,0,0,0,0,0,0,0]}' \
           --rate 10 || true
-        JOY_DEV="$$(find /dev/input/by-id -maxdepth 1 -type l -name '*-joystick' ! -name '*event-joystick' | head -n 1)"
-        if [ -z "$$JOY_DEV" ]; then
-          JOY_DEV=/dev/input/js0
-        fi
+        # Use the kernel joystick path for the F710/RumblePad receiver. The
+        # by-id symlink can change between Logitech product IDs after reconnects,
+        # leaving joy_linux retrying a stale path forever.
+        JOY_DEV=/dev/input/js0
         echo "[joy] using device: $$JOY_DEV"
         exec ros2 run joy_linux joy_linux_node \
           --ros-args \
@@ -130,6 +130,7 @@ services:
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
       - ./src/ecza_description/launch/hardware.launch.py:/ws/install/share/ecza_description/launch/hardware.launch.py:ro
+      - ./src/ecza_description/scripts/wheel_bridge.py:/ws/install/lib/ecza_description/wheel_bridge.py:ro
     command: >
       ros2 launch ecza_description hardware.launch.py
     restart: unless-stopped

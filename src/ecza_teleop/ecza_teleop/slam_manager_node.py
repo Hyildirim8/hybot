@@ -981,18 +981,29 @@ class SlamManagerNode(Node):
         else:
             strafe_y = 0.0                             # yan yol yok
 
-        if in_trouble:
-            # ── Sensor-driven escape ───────────────────────────────────────────
-            # Trouble boyunca recovery fazını yönet: kısa geri çık, sonra 360°
-            # analizinin gösterdiği açık açıya dön/kay. Faz bitince yönü tazele.
+        # Geri çekilme sırasında ön mesafe geçici olarak açılabilir; bu recovery'yi
+        # erken iptal etmemeli. Başlatıldıktan sonra tam çevrimi tamamlayana kadar
+        # ya da engel kalıcı olarak temizlenene kadar recovery aktif kalır.
+        should_recover = in_trouble or self._recovery_active
+        elapsed = 0.0
+
+        if should_recover:
             if not self._recovery_active:
                 self._start_recovery()
             elapsed = time.monotonic() - self._recovery_started_at
             cycle_s = self._recovery_backup_time + self._recovery_rotate_time
             if elapsed > cycle_s:
-                self._start_recovery()
-                elapsed = 0.0
+                if in_trouble:
+                    # Hâlâ sorun var — çevrimi yeniden başlat
+                    self._start_recovery()
+                    elapsed = 0.0
+                else:
+                    # Çevrim bitti, engel temizlendi — serbest sürüşe geç
+                    self._reset_recovery()
+                    should_recover = False
 
+        if should_recover:
+            # ── Sensor-driven escape ───────────────────────────────────────────
             sign = self._recovery_turn_sign or self._choose_turn_sign()
             escape_strafe_y = self._strafe_toward_escape(strafe_y)
 

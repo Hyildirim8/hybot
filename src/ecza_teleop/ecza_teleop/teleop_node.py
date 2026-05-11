@@ -317,9 +317,19 @@ class TeleopNode(Node):
             return twist
 
         if self._autonomous:
-            # Auto mode: emergency stop only — triggers at a much closer threshold
-            # than teleop so Nav2 can plan around obstacles at longer range.
-            # Only fires when a dynamic obstacle (e.g. person) is very close.
+            if self._enable_scan_safety_in_auto and twist.linear.x > 0.0 and self._front_blocked:
+                safe = Twist()
+                safe.linear.x = 0.0
+                safe.linear.y = twist.linear.y
+                safe.angular.z = twist.angular.z
+                self.get_logger().warn(
+                    f"AUTO ön engel {self._front_obstacle_distance:.2f}m; ileri kesildi "
+                    f"(sol={self._left_clearance:.2f}m sağ={self._right_clearance:.2f}m)",
+                    throttle_duration_sec=1.0,
+                )
+                return safe
+
+            # Emergency stop remains as a second layer for very close obstacles.
             if twist.linear.x > 0.0 and self._front_obstacle_distance <= self._auto_emergency_stop_dist:
                 safe = Twist()
                 safe.linear.x = 0.0
