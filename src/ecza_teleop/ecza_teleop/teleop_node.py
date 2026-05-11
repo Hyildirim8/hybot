@@ -69,6 +69,7 @@ class TeleopNode(Node):
         self.declare_parameter("btn_auto_mode_alt", -1)
         self.declare_parameter("btn_auto_mode_candidates", [9, 8])
         self.declare_parameter("auto_toggle_debounce_ms", 400)  # minimum interval between mode toggles
+        self.declare_parameter("mode_handoff_stop_s", 0.35)
         self.declare_parameter("nav_cmd_topic", "/cmd_vel_nav")
         self.declare_parameter("start_in_autonomous", True)
         self.declare_parameter("max_linear_speed", 0.5)
@@ -104,6 +105,7 @@ class TeleopNode(Node):
             self.get_parameter("btn_auto_mode_candidates").value
         )
         self._auto_toggle_debounce_ms = int(self.get_parameter("auto_toggle_debounce_ms").value)
+        self._mode_handoff_stop_s = float(self.get_parameter("mode_handoff_stop_s").value)
         self._nav_cmd_topic = self.get_parameter("nav_cmd_topic").value
         self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
@@ -148,6 +150,7 @@ class TeleopNode(Node):
         self._autonomous = bool(self._start_in_autonomous)  # False = TELEOP, True = AUTO
         self._prev_auto_btn = False       # edge-detect across primary/alt buttons
         self._last_mode_toggle_time = 0.0
+        self._handoff_stop_until = 0.0
         self._axes_ready = not self._reject_extreme_axis_startup
         self._front_blocked = False
         self._front_obstacle_distance = math.inf
@@ -373,6 +376,7 @@ class TeleopNode(Node):
         if auto_btn_now and not self._prev_auto_btn and (now_s - self._last_mode_toggle_time) >= debounce_s:
             self._autonomous = not self._autonomous
             self._last_mode_toggle_time = now_s
+            self._handoff_stop_until = now_s + max(0.0, self._mode_handoff_stop_s)
             self._publish_mode()
             # Always stop the robot on any transition so neither Nav2 nor
             # the joystick leaves the wheels spinning during the handoff.
@@ -405,6 +409,11 @@ class TeleopNode(Node):
                 self._publish_zero()
                 return
             self._axes_ready = True
+
+        # Dead-man switch check
+        if now_s < self._handoff_stop_until:
+            self._publish_zero()
+            return
 
         # Dead-man switch check
         enabled = True
@@ -454,7 +463,7 @@ class TeleopNode(Node):
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
         # Forward Nav2 velocity commands only while in AUTO mode.
-        if self._autonomous:
+        if self._autonomous and time.monotonic() >= self._handoff_stop_until:
             cmd = Twist()
             cmd.linear.x = msg.linear.x
             cmd.linear.y = -msg.linear.y if self._auto_strafe_invert else msg.linear.y
@@ -486,12 +495,16 @@ class TeleopNode(Node):
         self._cmd_vel_pub.publish(twist)
 
     def _operator_takeover_requested(self, msg: Joy) -> bool:
-        if self._require_en:
-            enabled = self._button_pressed(msg, self._btn_en) or self._button_pressed(
-                msg, self._btn_en_alt
-            )
-            if not enabled:
-                return False
+        # Manual mode no longer requires LB/RB, so resting joystick drift should
+        # not kick AUTO back to TELEOP. Use Start for explicit mode handoff.
+        if not self._require_en:
+            return False
+
+        enabled = self._button_pressed(msg, self._btn_en) or self._button_pressed(
+            msg, self._btn_en_alt
+        )
+        if not enabled:
+            return False
 
         active_axes = (
             abs(self._apply_deadzone(self._raw_axis(msg, self._ax_lx))) > 0.0

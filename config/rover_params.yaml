@@ -21,7 +21,7 @@
 
     # ── Speed limits ──────────────────────────────────────────────────────────
     max_linear_speed: 1.5          # m/s — maximum translational speed
-    max_angular_speed: 3.0         # rad/s — maximum rotation speed
+    max_angular_speed: 1.4         # rad/s — dönüşte SLAM/odom kaymasını azaltmak için sınırlı
 
     # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
     # Logitech F710 Gamepad — D-mode (switch on back set to D), linux joy driver
@@ -48,10 +48,11 @@
     btn_strafe_right: 7            # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
     strafe_invert: true            # manuel strafe: sağ komut gerçek sağ/RViz sağ ile eşleşsin
     auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
-    btn_auto_mode: -1              # disabled: noisy Start/Back was stealing joystick control
-    btn_auto_mode_alt: -1          # disabled: keep teleop in joystick mode
-    btn_auto_mode_candidates: [-1] # disabled: no alternate TELEOP <-> AUTO toggles
+    btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
+    btn_auto_mode_alt: -1          # no alternate toggle
+    btn_auto_mode_candidates: [9]  # only Start toggles TELEOP <-> AUTO
     auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
+    mode_handoff_stop_s: 0.35      # AUTO/MANUAL geçişte eski komutları kısa süre kes
     nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     reject_extreme_axis_startup: false  # joystick başlangıçta ±1 gönderince bekleme — kapat
@@ -70,7 +71,7 @@
     # Buttons (12 total):
     #   0=X  1=A  2=B  3=Y  4=LB  5=RB  6=LT  7=RT  8=Back  9=Start  10=L3  11=R3
     btn_save_map: 3                # Y — mevcut SLAM haritasını /maps/ dizinine kaydet
-    btn_explore_toggle: 1          # A — otonom frontier keşfini aç/kapat
+    btn_explore_toggle: 1          # A — AUTO moddayken otonom frontier keşfini aç/kapat
     btn_reset_pose: 10             # L3 — AMCL poz sıfırlama (/initialpose yayınla)
     btn_debounce_ms: 150           # buton sıçramasını önle
     map_save_dir: "/maps"          # kayıt dizini (navigation container'daki bağlama)
@@ -84,11 +85,14 @@
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.
-    direct_explore_speed: 0.70
-    direct_explore_turn_speed: 0.55
+    direct_explore_speed: 0.55
+    direct_explore_turn_speed: 0.34
     direct_explore_backup_speed: 0.28
     direct_explore_strafe_speed: 0.50
-    direct_explore_kp: 0.70              # düşürüldü: 1.10 → 0.70 — nesnelere aşırı tepkiyi azalt
+    direct_explore_kp: 0.46              # PID P: açık yöne dön, harita kaymasını azaltmak için yumuşak
+    direct_explore_ki: 0.01              # PID I: küçük kalıcı yön hatasını toplar
+    direct_explore_kd: 0.24              # PID D: ani yön değişimlerini sönümler
+    direct_explore_pid_i_limit: 0.25     # integral rüzgarını sınırla
     direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°)
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
     min_side_clearance_m: 0.15          # dar koridor: her iki yan < 0.15m → çok dar
@@ -96,7 +100,7 @@
     direct_explore_escape_distance: 0.36 # kaçış mesafesi
     direct_explore_front_angle_deg: 60.0  # check ±30° forward cone
     direct_explore_recovery_backup_time_s: 1.1   # recovery faz-1: geri çekil süresi (0.9 → 1.1 daha geniş açılır)
-    direct_explore_recovery_rotate_time_s: 2.5   # recovery faz-2: dönerek çık süresi (2.5 → ~90°+ dönüş için)
+    direct_explore_recovery_rotate_time_s: 3.2   # recovery faz-2: düşük hızla ~90°+ dönüş için
 
     # ── wheel_bridge (motor wiring + odometry alignment) ───────────────────
     # command_direction_signs: FL/RL motor channels are wired backwards on the

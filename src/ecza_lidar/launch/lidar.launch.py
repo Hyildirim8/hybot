@@ -45,10 +45,28 @@ def generate_launch_description() -> LaunchDescription:
             "angle_compensate": True,
             "scan_mode":       "Standard",  # Standard mode: ~8000 samples/s; Boost overflows serial buffer on RPi
         }],
+        remappings=[
+            ("/scan", "/scan_raw"),
+            ("scan", "/scan_raw"),
+        ],
+    )
+
+    scan_restamper = Node(
+        package="ecza_lidar",
+        executable="scan_restamper.py",
+        name="scan_restamper",
+        output="screen",
+        parameters=[{
+            "input_topic": "/scan_raw",
+            "output_topic": "/scan",
+            "frame_id": LaunchConfiguration("frame_id"),
+            "max_publish_hz": 6.0,
+        }],
     )
 
     return LaunchDescription([
         serial_port_arg,
         frame_id_arg,
         rplidar_node,
+        scan_restamper,
     ])

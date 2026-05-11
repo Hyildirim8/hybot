@@ -71,6 +71,9 @@ class SlamManagerNode(Node):
         self.declare_parameter("direct_explore_front_angle_deg", 45.0)
         self.declare_parameter("min_side_clearance_m", 0.35)
         self.declare_parameter("direct_explore_kp", 1.8)          # P-kazancı
+        self.declare_parameter("direct_explore_ki", 0.02)
+        self.declare_parameter("direct_explore_kd", 0.18)
+        self.declare_parameter("direct_explore_pid_i_limit", 0.45)
         self.declare_parameter("direct_explore_lookahead_deg", 140.0)  # açık yön arama açısı
         self.declare_parameter("direct_explore_react_distance", 1.5)   # engel tepki mesafesi
         self.declare_parameter("direct_explore_recovery_backup_time_s", 0.9)
@@ -125,6 +128,11 @@ class SlamManagerNode(Node):
             self.get_parameter("min_side_clearance_m").value
         )
         self._direct_kp = float(self.get_parameter("direct_explore_kp").value)
+        self._direct_ki = float(self.get_parameter("direct_explore_ki").value)
+        self._direct_kd = float(self.get_parameter("direct_explore_kd").value)
+        self._direct_i_limit = float(
+            self.get_parameter("direct_explore_pid_i_limit").value
+        )
         self._direct_lookahead_rad = math.radians(
             float(self.get_parameter("direct_explore_lookahead_deg").value)
         )
@@ -166,6 +174,9 @@ class SlamManagerNode(Node):
         self._smooth_vy: float = 0.0
         self._smooth_wz: float = 0.0
         self._SMOOTH_ALPHA: float = 0.50   # 0.30 çok yavaş ivmeleniyordu → 0.50
+        self._pid_i: float = 0.0
+        self._pid_prev_error: Optional[float] = None
+        self._pid_prev_t: float = 0.0
         self._failed_goals: List[Tuple[float, float]] = []
         self._direct_explore_active: bool   = False
         self._frontier_lock = threading.Lock()
@@ -195,11 +206,16 @@ class SlamManagerNode(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
+        reliable = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
 
         # ── Yayıncılar ────────────────────────────────────────────────────────
         self._status_pub    = self.create_publisher(String, "slam_manager/status", latched)
         self._exploring_pub = self.create_publisher(Bool,   "slam_manager/exploring", latched)
-        self._cmd_pub          = self.create_publisher(Twist,  "/cmd_vel_nav", best_effort)
+        self._cmd_pub          = self.create_publisher(Twist,  "/cmd_vel_nav", reliable)
         self._initialpose_pub  = self.create_publisher(
             PoseWithCovarianceStamped, '/initialpose', latched)
 
@@ -238,28 +254,28 @@ class SlamManagerNode(Node):
         deb = self._debounce_ms / 1000.0
 
         # Y butonu → harita kaydet
-        save_on = self._btn_save < len(msg.buttons) and bool(msg.buttons[self._btn_save])
+        save_on = 0 <= self._btn_save < len(msg.buttons) and bool(msg.buttons[self._btn_save])
         if save_on and not self._prev_save_btn and (now - self._last_btn_t["save"]) >= deb:
             self._last_btn_t["save"] = now
             self._save_map()
         self._prev_save_btn = save_on
 
         # A butonu → keşif modunu aç/kapat
-        exp_on = self._btn_explore < len(msg.buttons) and bool(msg.buttons[self._btn_explore])
+        exp_on = 0 <= self._btn_explore < len(msg.buttons) and bool(msg.buttons[self._btn_explore])
         if exp_on and not self._prev_explore_btn and (now - self._last_btn_t["explore"]) >= deb:
             self._last_btn_t["explore"] = now
             self._toggle_exploration()
         self._prev_explore_btn = exp_on
 
         # B butonu → keşfi sıfırla (kara liste temizle, yeniden başlat)
-        rst_on = self._btn_reset < len(msg.buttons) and bool(msg.buttons[self._btn_reset])
+        rst_on = 0 <= self._btn_reset < len(msg.buttons) and bool(msg.buttons[self._btn_reset])
         if rst_on and not self._prev_reset_btn and (now - self._last_btn_t["reset"]) >= deb:
             self._last_btn_t["reset"] = now
             self._reset_exploration()
         self._prev_reset_btn = rst_on
 
         # L3 butonu → AMCL poz sıfırla (/initialpose)
-        pose_on = self._btn_pose_reset < len(msg.buttons) and bool(msg.buttons[self._btn_pose_reset])
+        pose_on = 0 <= self._btn_pose_reset < len(msg.buttons) and bool(msg.buttons[self._btn_pose_reset])
         if pose_on and not self._prev_pose_btn and (now - self._last_btn_t["pose"]) >= deb:
             self._last_btn_t["pose"] = now
             self._reset_pose()
@@ -272,13 +288,22 @@ class SlamManagerNode(Node):
 
     def _mode_cb(self, msg: Bool) -> None:
         self._autonomous = msg.data
-        if not self._autonomous and self._goal_handle is not None:
-            self._cancel_goal()
         if not self._autonomous:
+            # Manual handoff must leave no queued autonomous command or stale
+            # Nav2 goal behind; otherwise RViz/TF can appear to jump during mode changes.
+            self._exploring = False
+            m = Bool()
+            m.data = False
+            self._exploring_pub.publish(m)
+            self._cancel_goal()
             self._direct_explore_active = False
+            self._pending_frontier = None
             self._invalidate_frontier_target()
             self._escape_turn_sign = 0.0
             self._recovery_active = False
+            self._reset_recovery()
+            self._reset_pid()
+            self._smooth_angle = 0.0
             self._publish_zero()
 
     def _scan_cb(self, msg: LaserScan) -> None:
@@ -392,16 +417,34 @@ class SlamManagerNode(Node):
                     and abs(frontier_target_angle) <= lookahead):
                 ft_idx = int((frontier_target_angle + lookahead) / sector_width)
                 ft_idx = max(0, min(n_sectors - 1, ft_idx))
+            previous_angle = self._best_open_angle
             for i in range(n_sectors):
-                score = sector_min[i] if sector_min[i] != math.inf else self._direct_react_distance
+                center_angle = -lookahead + (i + 0.5) * sector_width
+                center = sector_min[i] if sector_min[i] != math.inf else self._direct_react_distance
+                left_nb = sector_min[i - 1] if i > 0 else center
+                right_nb = sector_min[i + 1] if i < n_sectors - 1 else center
+                left_nb = self._direct_react_distance if left_nb == math.inf else left_nb
+                right_nb = self._direct_react_distance if right_nb == math.inf else right_nb
+                center = min(center, self._direct_react_distance)
+                left_nb = min(left_nb, self._direct_react_distance)
+                right_nb = min(right_nb, self._direct_react_distance)
+                score = (0.50 * center) + (0.25 * left_nb) + (0.25 * right_nb)
                 fwd_bias = 0.10 * max(0.0, 1.0 - abs(i - center_idx) / max(1, center_idx))
+                # Hysteresis: benzer açıklıkta önceki yöne yakın kal. Bu, lidar
+                # gürültüsünde sol/sağ zıplamayı azaltıp SLAM kaymasını düşürür.
+                angle_jump = abs(math.atan2(
+                    math.sin(center_angle - previous_angle),
+                    math.cos(center_angle - previous_angle),
+                ))
+                inertia_bias = 0.18 * max(0.0, 1.0 - angle_jump / max(0.1, lookahead))
                 # Keşfedilmemiş alana (frontier) doğru yön bonusu — aynı yerden geçmeyi azalt
                 frontier_bias = 0.0
                 if ft_idx is not None:
                     dist_ft = abs(i - ft_idx)
                     frontier_bias = 0.40 * max(0.0, 1.0 - dist_ft / max(1, n_sectors // 4))
-                if score + fwd_bias + frontier_bias > best_score:
-                    best_score = score + fwd_bias + frontier_bias
+                total_score = score + fwd_bias + frontier_bias + inertia_bias
+                if total_score > best_score:
+                    best_score = total_score
                     best_idx = i
             self._best_open_angle = -lookahead + (best_idx + 0.5) * sector_width
         else:
@@ -415,9 +458,20 @@ class SlamManagerNode(Node):
             # -180..+180 normalize: 0=ileri, +90=sol, -90=sağ, ±180=arka
             centered = center_deg if center_deg <= 180.0 else center_deg - 360.0
             clearance = esc_min[ei] if esc_min[ei] != math.inf else self._direct_react_distance
+            clearance = min(clearance, self._direct_react_distance)
+            prev_idx = (ei - 1) % _N_ESC
+            next_idx = (ei + 1) % _N_ESC
+            prev_clear = esc_min[prev_idx] if esc_min[prev_idx] != math.inf else self._direct_react_distance
+            next_clear = esc_min[next_idx] if esc_min[next_idx] != math.inf else self._direct_react_distance
+            clearance = (0.50 * clearance) + (0.25 * min(prev_clear, self._direct_react_distance)) + (0.25 * min(next_clear, self._direct_react_distance))
             # Ön 180°'ye bonus: 0°=+0.5, 90°=+0.25, 180°=0
             front_bonus = 0.5 * max(0.0, 1.0 - abs(centered) / 180.0)
-            score = clearance + front_bonus
+            escape_jump = abs(math.atan2(
+                math.sin(math.radians(centered) - self._best_escape_angle),
+                math.cos(math.radians(centered) - self._best_escape_angle),
+            ))
+            inertia_bonus = 0.15 * max(0.0, 1.0 - escape_jump / math.pi)
+            score = clearance + front_bonus + inertia_bonus
             if score > best_esc_score:
                 best_esc_score = score
                 best_esc_angle = math.radians(centered)
@@ -540,6 +594,7 @@ class SlamManagerNode(Node):
         self._smooth_vx = 0.0
         self._smooth_vy = 0.0
         self._smooth_wz = 0.0
+        self._reset_pid()
         self._invalidate_frontier_target()
         self._publish_zero()
         self.get_logger().info("Keşif sıfırlandı (B butonu)")
@@ -563,6 +618,7 @@ class SlamManagerNode(Node):
             self._invalidate_frontier_target()
             self._escape_turn_sign = 0.0
             self._recovery_active = False
+            self._reset_pid()
             self._publish_zero()
 
     def _explore_tick(self) -> None:
@@ -820,19 +876,29 @@ class SlamManagerNode(Node):
         self._active_goal = (wx, wy)
 
         send_fut = self._nav.send_goal_async(goal)
-        send_fut.add_done_callback(self._on_goal_accepted)
+        send_fut.add_done_callback(
+            lambda future, target=(wx, wy): self._on_goal_accepted(future, target)
+        )
 
-    def _on_goal_accepted(self, future) -> None:
-        handle = future.result()
+    def _on_goal_accepted(self, future, target: Tuple[float, float]) -> None:
+        if not (self._exploring and self._autonomous):
+            return
+        try:
+            handle = future.result()
+        except Exception as exc:
+            self.get_logger().warn(f"Keşif hedefi gönderilemedi: {exc}")
+            self._enable_direct_explore("hedef gönderilemedi")
+            return
         if not handle.accepted:
             self.get_logger().warn("Keşif hedefi reddedildi — fallback")
-            self._blacklist_active_goal()
+            self._failed_goals.append(target)
             self._active_goal = None
             self._enable_direct_explore("hedef reddedildi")
             return
         self._goal_handle = handle
+        self._active_goal = target
         self._direct_explore_active = False   # Nav2 navige ediyor, direct_explore durur
-        self._pub_status(f"Nav2 → ({self._active_goal[0]:.1f}, {self._active_goal[1]:.1f})")
+        self._pub_status(f"Nav2 → ({target[0]:.1f}, {target[1]:.1f})")
         handle.get_result_async().add_done_callback(self._on_goal_result)
 
     def _on_goal_result(self, future) -> None:
@@ -909,6 +975,39 @@ class SlamManagerNode(Node):
         self._recovery_turn_sign = 0.0
         self._escape_turn_sign = 0.0
         self._trouble_count = 0
+
+    def _reset_pid(self) -> None:
+        self._pid_i = 0.0
+        self._pid_prev_error = None
+        self._pid_prev_t = 0.0
+
+    def _pid_turn(self, error: float, limit: float, gain_scale: float = 1.0) -> float:
+        now = time.monotonic()
+        if self._pid_prev_t <= 0.0:
+            dt = 0.1
+        else:
+            dt = max(0.02, min(0.25, now - self._pid_prev_t))
+
+        error = math.atan2(math.sin(error), math.cos(error))
+        if self._pid_prev_error is None or abs(error) > math.radians(75.0):
+            derivative = 0.0
+            self._pid_i = 0.0
+        else:
+            previous = self._pid_prev_error
+            derivative = math.atan2(math.sin(error - previous), math.cos(error - previous)) / dt
+
+        self._pid_i += error * dt
+        i_limit = max(0.0, self._direct_i_limit)
+        self._pid_i = max(-i_limit, min(i_limit, self._pid_i))
+        self._pid_prev_error = error
+        self._pid_prev_t = now
+
+        command = gain_scale * (
+            (self._direct_kp * error)
+            + (self._direct_ki * self._pid_i)
+            + (self._direct_kd * derivative)
+        )
+        return max(-limit, min(limit, command))
 
     def _strafe_toward_escape(self, fallback_y: float) -> float:
         """360° kaçış açısına göre yana kay; uygun değilse normal açıklığı kullan."""
@@ -1006,10 +1105,17 @@ class SlamManagerNode(Node):
             # ── Sensor-driven escape ───────────────────────────────────────────
             sign = self._recovery_turn_sign or self._choose_turn_sign()
             escape_strafe_y = self._strafe_toward_escape(strafe_y)
+            escape_error = self._best_escape_angle
+            if abs(escape_error) < math.radians(12.0):
+                escape_error = sign * math.radians(45.0)
 
             if back_blocked or elapsed >= self._recovery_backup_time:
                 # Arkası kapalıysa ya da geri fazı bittiyse: açık açıya dön + yana kay.
-                cmd.angular.z = sign * self._direct_turn_speed * 1.25
+                cmd.angular.z = self._pid_turn(
+                    escape_error,
+                    self._direct_turn_speed * 1.25,
+                    gain_scale=1.15,
+                )
                 cmd.linear.y  = escape_strafe_y
                 if not back_blocked:
                     cmd.linear.x = -self._direct_backup_speed * 0.35
@@ -1035,18 +1141,22 @@ class SlamManagerNode(Node):
                 # Açık yol: ileri git + hafif yön düzeltmesi.
                 # Duvara yakın (< 0.40m yan) → hafif düzeltme kayması.
                 cmd.linear.x  = self._direct_speed
-                cmd.angular.z = max(-self._direct_turn_speed,
-                                    min(self._direct_turn_speed,
-                                        self._direct_kp * 0.50 * error))
+                cmd.angular.z = self._pid_turn(
+                    error,
+                    self._direct_turn_speed,
+                    gain_scale=0.50,
+                )
                 if min(side_l, side_r) < 0.40:
                     cmd.linear.y = strafe_y * 0.35
             else:
                 # Stop zone (eff_escape < front < eff_stop): ileri gitme, dön + tam yana kayma.
                 # Mecanum strafing ile köşe etrafında kaymak dönmeden çok daha hızlı.
                 cmd.linear.x  = 0.0
-                cmd.angular.z = max(-self._direct_turn_speed,
-                                    min(self._direct_turn_speed,
-                                        self._direct_kp * 1.0 * error))
+                cmd.angular.z = self._pid_turn(
+                    error,
+                    self._direct_turn_speed,
+                    gain_scale=1.0,
+                )
                 cmd.linear.y  = strafe_y
 
         cmd = self._apply_velocity_smoothing(cmd, emergency=in_trouble)
