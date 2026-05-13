@@ -6,6 +6,9 @@ Modes (set via 'mode' launch argument):
               No pre-existing map needed. Good for first exploration.
               Publishes: /map (grows over time)
 
+  slam_only — Online SLAM only. Use this on Raspberry Pi when building a clean
+              map; Nav2/costmaps/controllers are not started, so SLAM keeps up.
+
   nav       — Nav2 with AMCL localisation against a saved map.
               Requires: map:=<path-to-map.yaml>
               Good for repeatable navigation in a known environment.
@@ -52,7 +55,7 @@ def generate_launch_description() -> LaunchDescription:
     mode_arg = DeclareLaunchArgument(
         "mode",
         default_value="slam",
-        description="Navigation mode: 'slam' (mapping) or 'nav' (localisation)",
+        description="Navigation mode: 'slam', 'slam_only', or 'nav'",
     )
     map_arg = DeclareLaunchArgument(
         "map",
@@ -81,9 +84,20 @@ def generate_launch_description() -> LaunchDescription:
     autostart      = LaunchConfiguration("autostart")
     params_file    = LaunchConfiguration("params_file")
 
-    # ── SLAM Toolbox (slam mode only) ─────────────────────────────────────
+    # ── SLAM Toolbox (slam/slam_only modes) ───────────────────────────────
     slam_node = Node(
         condition=IfCondition(EqualsSubstitution(mode, "slam")),
+        package="slam_toolbox",
+        executable="async_slam_toolbox_node",
+        name="slam_toolbox",
+        output="screen",
+        parameters=[
+            slam_params_file,
+            {"use_sim_time": use_sim_time},
+        ],
+    )
+    slam_only_node = Node(
+        condition=IfCondition(EqualsSubstitution(mode, "slam_only")),
         package="slam_toolbox",
         executable="async_slam_toolbox_node",
         name="slam_toolbox",
@@ -102,6 +116,7 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(EqualsSubstitution(mode, "slam")),
         actions=[
             SetRemap(src="/cmd_vel", dst="/cmd_vel_nav"),
+            SetRemap(src="/cmd_vel_smoothed", dst="/cmd_vel_nav_smoothed"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(pkg_nav2, "launch", "navigation_launch.py")
@@ -122,6 +137,7 @@ def generate_launch_description() -> LaunchDescription:
         condition=IfCondition(EqualsSubstitution(mode, "nav")),
         actions=[
             SetRemap(src="/cmd_vel", dst="/cmd_vel_nav"),
+            SetRemap(src="/cmd_vel_smoothed", dst="/cmd_vel_nav_smoothed"),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     os.path.join(pkg_nav2, "launch", "bringup_launch.py")
@@ -144,6 +160,10 @@ def generate_launch_description() -> LaunchDescription:
         msg="[ecza_navigation] SLAM mode — building map with SLAM Toolbox. "
             "Save map: ros2 run nav2_map_server map_saver_cli -f /maps/my_map",
     )
+    log_slam_only = LogInfo(
+        condition=IfCondition(EqualsSubstitution(mode, "slam_only")),
+        msg="[ecza_navigation] SLAM-only mode — Nav2 is disabled for clean mapping.",
+    )
     log_nav = LogInfo(
         condition=IfCondition(EqualsSubstitution(mode, "nav")),
         msg="[ecza_navigation] Nav mode — localising with AMCL against saved map.",
@@ -162,8 +182,10 @@ def generate_launch_description() -> LaunchDescription:
         autostart_arg,
         params_file_arg,
         log_slam,
+        log_slam_only,
         log_nav,
         slam_node,
+        slam_only_node,
         nav2_slam,
         nav2_nav,
     ])

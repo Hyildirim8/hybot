@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!--
+  navigate_to_pose_simple.xml — minimal navigate_to_pose behavior tree.
+
+  Uses only the 4 plugins registered in nav2_params.yaml plugin_lib_names:
+    nav2_rate_controller_bt_node
+    nav2_pipeline_sequence_bt_node
+    nav2_compute_path_to_pose_action_bt_node
+    nav2_follow_path_action_bt_node
+
+  No recovery behaviors — if path compute or following fails, the action
+  returns FAILURE immediately. slam_manager_node handles retries via goal
+  blacklisting and frontier re-selection.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RateController hz="1.0">
+      <PipelineSequence name="NavigateWithReplanning">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        <FollowPath path="{path}" controller_id="FollowPath"/>
+      </PipelineSequence>
+    </RateController>
+  </BehaviorTree>
+</root>
