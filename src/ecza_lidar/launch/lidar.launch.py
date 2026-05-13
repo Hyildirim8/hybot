@@ -59,8 +59,14 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[{
             "input_topic": "/scan_raw",
             "output_topic": "/scan",
+            "slam_output_topic": "/scan_slam",
             "frame_id": LaunchConfiguration("frame_id"),
-            "max_publish_hz": 6.0,
+            "max_publish_hz": 5.0,
+            "angle_downsample": 2,
+            "slam_publish_hz": 2.0,
+            "slam_angle_downsample": 4,
+            "max_slam_angular_z": 0.25,
+            "odom_topic": "/odom",
         }],
     )
 

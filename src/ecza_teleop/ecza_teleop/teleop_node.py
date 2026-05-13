@@ -71,6 +71,7 @@ class TeleopNode(Node):
         self.declare_parameter("auto_toggle_debounce_ms", 400)  # minimum interval between mode toggles
         self.declare_parameter("mode_handoff_stop_s", 0.35)
         self.declare_parameter("nav_cmd_topic", "/cmd_vel_nav")
+        self.declare_parameter("auto_enable_on_nav_cmd", True)
         self.declare_parameter("start_in_autonomous", True)
         self.declare_parameter("max_linear_speed", 0.5)
         self.declare_parameter("max_angular_speed", 1.0)
@@ -107,6 +108,9 @@ class TeleopNode(Node):
         self._auto_toggle_debounce_ms = int(self.get_parameter("auto_toggle_debounce_ms").value)
         self._mode_handoff_stop_s = float(self.get_parameter("mode_handoff_stop_s").value)
         self._nav_cmd_topic = self.get_parameter("nav_cmd_topic").value
+        self._auto_enable_on_nav_cmd = bool(
+            self.get_parameter("auto_enable_on_nav_cmd").value
+        )
         self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
         self._max_ang = self.get_parameter("max_angular_speed").value
@@ -182,8 +186,13 @@ class TeleopNode(Node):
 
         self._joy_sub = self.create_subscription(Joy, "joy", self._joy_cb, 10)
         # Match Nav2/controller cmd_vel reliability in containerized deployments.
+        reliable_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
         self._nav_sub = self.create_subscription(
-            Twist, self._nav_cmd_topic, self._nav_cmd_cb, best_effort_qos
+            Twist, self._nav_cmd_topic, self._nav_cmd_cb, reliable_qos
         )
         self._scan_sub = None
         if self._enable_scan_safety:
@@ -324,9 +333,13 @@ class TeleopNode(Node):
                 safe = Twist()
                 safe.linear.x = 0.0
                 safe.linear.y = twist.linear.y
-                safe.angular.z = twist.angular.z
+                turn_dir = 1.0 if self._left_clearance >= self._right_clearance else -1.0
+                requested_turn = twist.angular.z
+                if abs(requested_turn) < self._avoidance_turn_speed:
+                    requested_turn = turn_dir * self._avoidance_turn_speed
+                safe.angular.z = requested_turn
                 self.get_logger().warn(
-                    f"AUTO ön engel {self._front_obstacle_distance:.2f}m; ileri kesildi "
+                    f"AUTO ön engel {self._front_obstacle_distance:.2f}m; ileri kesildi, açık tarafa dönülüyor "
                     f"(sol={self._left_clearance:.2f}m sağ={self._right_clearance:.2f}m)",
                     throttle_duration_sec=1.0,
                 )
@@ -337,10 +350,11 @@ class TeleopNode(Node):
                 safe = Twist()
                 safe.linear.x = 0.0
                 safe.linear.y = twist.linear.y
-                safe.angular.z = twist.angular.z
+                turn_dir = 1.0 if self._left_clearance >= self._right_clearance else -1.0
+                safe.angular.z = turn_dir * self._avoidance_turn_speed
                 self.get_logger().warn(
                     f"AUTO acil durum dur: önde {self._front_obstacle_distance:.2f}m "
-                    f"(insan/dinamik engel)",
+                    f"(insan/dinamik engel); açık tarafa dönülüyor",
                     throttle_duration_sec=1.0,
                 )
                 return safe
@@ -462,6 +476,17 @@ class TeleopNode(Node):
         self._publish_cmd(self._apply_scan_safety(twist))
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
+        if (
+            self._auto_enable_on_nav_cmd
+            and not self._autonomous
+            and self._twist_has_motion(msg)
+        ):
+            self._autonomous = True
+            self._last_mode_toggle_time = time.monotonic()
+            self._handoff_stop_until = 0.0
+            self._publish_mode()
+            self.get_logger().info("Nav2 command received -> AUTONOMOUS (Nav2)")
+
         # Forward Nav2 velocity commands only while in AUTO mode.
         if self._autonomous and time.monotonic() >= self._handoff_stop_until:
             cmd = Twist()
@@ -472,6 +497,13 @@ class TeleopNode(Node):
             cmd.angular.y = msg.angular.y
             cmd.angular.z = msg.angular.z
             self._publish_cmd(self._apply_scan_safety(cmd))
+
+    def _twist_has_motion(self, msg: Twist) -> bool:
+        return (
+            abs(msg.linear.x) > 1e-4
+            or abs(msg.linear.y) > 1e-4
+            or abs(msg.angular.z) > 1e-4
+        )
 
     def _watchdog_cb(self) -> None:
         # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the

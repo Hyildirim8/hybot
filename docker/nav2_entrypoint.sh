@@ -56,9 +56,7 @@ wait_for_nav_services() {
     wait_for_service "/controller_server" 120 &&
     wait_for_service "/smoother_server"   120 &&
     wait_for_service "/planner_server"    120 &&
-    wait_for_service "/behavior_server"   120 &&
     wait_for_service "/bt_navigator"      120 &&
-    wait_for_service "/waypoint_follower" 120 &&
     wait_for_service "/velocity_smoother" 120
 }
 
@@ -90,23 +88,19 @@ lifecycle_transition() {
 }
 
 configure_nav_nodes() {
-    lifecycle_transition "controller_server" 1 "configure" 60 &&
-    lifecycle_transition "smoother_server"   1 "configure" 45 &&
-    lifecycle_transition "planner_server"    1 "configure" 60 &&
-    lifecycle_transition "behavior_server"   1 "configure" 45 &&
-    lifecycle_transition "bt_navigator"      1 "configure" 45 &&
-    lifecycle_transition "waypoint_follower" 1 "configure" 45 &&
-    lifecycle_transition "velocity_smoother" 1 "configure" 30
+    lifecycle_transition "controller_server" 1 "configure" 120 &&
+    lifecycle_transition "smoother_server"   1 "configure" 90 &&
+    lifecycle_transition "planner_server"    1 "configure" 180 &&
+    lifecycle_transition "bt_navigator"      1 "configure" 90 &&
+    lifecycle_transition "velocity_smoother" 1 "configure" 90
 }
 
 activate_nav_nodes() {
-    lifecycle_transition "controller_server" 3 "activate" 60 &&
-    lifecycle_transition "smoother_server"   3 "activate" 45 &&
-    lifecycle_transition "planner_server"    3 "activate" 60 &&
-    lifecycle_transition "behavior_server"   3 "activate" 45 &&
-    lifecycle_transition "bt_navigator"      3 "activate" 45 &&
-    lifecycle_transition "waypoint_follower" 3 "activate" 60 &&
-    lifecycle_transition "velocity_smoother" 3 "activate" 45
+    lifecycle_transition "controller_server" 3 "activate" 120 &&
+    lifecycle_transition "smoother_server"   3 "activate" 90 &&
+    lifecycle_transition "planner_server"    3 "activate" 180 &&
+    lifecycle_transition "bt_navigator"      3 "activate" 90 &&
+    lifecycle_transition "velocity_smoother" 3 "activate" 90
 }
 
 configure_localization_nodes() {
@@ -144,6 +138,14 @@ launch_cmd=(
 
 if [ "${MODE}" = "nav" ] && [ -n "${MAP_PATH}" ]; then
     launch_cmd+=("map:=${MAP_PATH}")
+fi
+
+if [ "${MODE}" = "slam_only" ]; then
+    echo "[navigation] launching SLAM-only mode — Nav2 lifecycle is skipped for clean mapping"
+    setsid "${launch_cmd[@]}" &
+    launch_pid=$!
+    wait "${launch_pid}"
+    exit $?
 fi
 
 attempt=0

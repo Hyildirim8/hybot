@@ -20,8 +20,8 @@
     wheel_radius: 0.04             # metres — 80 mm diameter mecanum wheel
 
     # ── Speed limits ──────────────────────────────────────────────────────────
-    max_linear_speed: 1.5          # m/s — maximum translational speed
-    max_angular_speed: 1.4         # rad/s — dönüşte SLAM/odom kaymasını azaltmak için sınırlı
+    max_linear_speed: 0.9          # m/s — haritalamada odom/SLAM yükünü düşük tut
+    max_angular_speed: 0.75        # rad/s — dönüşte SLAM/odom kaymasını azaltmak için sınırlı
 
     # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
     # Logitech F710 Gamepad — D-mode (switch on back set to D), linux joy driver
@@ -54,17 +54,18 @@
     auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
     mode_handoff_stop_s: 0.35      # AUTO/MANUAL geçişte eski komutları kısa süre kes
     nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
+    auto_enable_on_nav_cmd: true    # RViz Nav2 goal komut üretince otomatik AUTO'ya geç
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     reject_extreme_axis_startup: false  # joystick başlangıçta ±1 gönderince bekleme — kapat
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
     enable_scan_safety_in_auto: true  # AUTO'da da önde engel varken ileri komutu kes
-    auto_emergency_stop_distance: 0.28 # AUTO acil dur eşiğini büyüt: ince/ani engelde daha erken kes
+    auto_emergency_stop_distance: 0.38 # AUTO acil dur eşiği: çarpmadan önce erken kes
     scan_topic: "/scan"
-    front_obstacle_stop_distance: 0.30 # AUTO/TELEOP ön tamponu büyüt: çarpıp gaz vermeyi azalt
-    front_obstacle_clear_distance: 0.50
-    front_obstacle_angle_deg: 28.0    # yan duvarları "ön engel" sanmamak için daha dar koni
-    avoidance_turn_speed: 0.35
+    front_obstacle_stop_distance: 0.45 # AUTO/TELEOP ön tamponu büyüt: çarpıp gaz vermeyi azalt
+    front_obstacle_clear_distance: 0.75
+    front_obstacle_angle_deg: 36.0
+    avoidance_turn_speed: 0.45
     avoidance_strafe_speed: 0.25
 
     # ── slam_manager (SLAM + otonom keşif) ───────────────────────────────────
@@ -85,10 +86,10 @@
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.
-    direct_explore_speed: 0.55
-    direct_explore_turn_speed: 0.34
-    direct_explore_backup_speed: 0.28
-    direct_explore_strafe_speed: 0.50
+    direct_explore_speed: 0.35
+    direct_explore_turn_speed: 0.20
+    direct_explore_backup_speed: 0.20
+    direct_explore_strafe_speed: 0.30
     direct_explore_kp: 0.46              # PID P: açık yöne dön, harita kaymasını azaltmak için yumuşak
     direct_explore_ki: 0.01              # PID I: küçük kalıcı yön hatasını toplar
     direct_explore_kd: 0.24              # PID D: ani yön değişimlerini sönümler
