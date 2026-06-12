@@ -21,7 +21,7 @@
 
     # ── Speed limits ──────────────────────────────────────────────────────────
     max_linear_speed: 0.9          # m/s — haritalamada odom/SLAM yükünü düşük tut
-    max_angular_speed: 0.75        # rad/s — dönüşte SLAM/odom kaymasını azaltmak için sınırlı
+    max_angular_speed: 1.8         # rad/s — saat yönü dahil manuel dönüşü hızlandır
 
     # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
     # Logitech F710 Gamepad — D-mode (switch on back set to D), linux joy driver
@@ -53,14 +53,14 @@
     btn_auto_mode_candidates: [9]  # only Start toggles TELEOP <-> AUTO
     auto_toggle_debounce_ms: 400   # prevent rapid mode flip-flop from button bounce
     mode_handoff_stop_s: 0.35      # AUTO/MANUAL geçişte eski komutları kısa süre kes
-    nav_cmd_topic: "/cmd_vel_nav"  # Nav2 output is remapped here; teleop forwards it only in AUTO
+    nav_cmd_topic: "/cmd_vel_nav_smoothed"  # velocity_smoother çıkışı: /cmd_vel_nav_smoothed (smoother bypass'ını düzelt)
     auto_enable_on_nav_cmd: true    # RViz Nav2 goal komut üretince otomatik AUTO'ya geç
     start_in_autonomous: false     # start in TELEOP so joystick works immediately; press Start (btn 9) to switch to AUTO/Nav2
     reject_extreme_axis_startup: false  # joystick başlangıçta ±1 gönderince bekleme — kapat
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
-    enable_scan_safety_in_auto: true  # AUTO'da da önde engel varken ileri komutu kes
-    auto_emergency_stop_distance: 0.38 # AUTO acil dur eşiği: çarpmadan önce erken kes
+    enable_scan_safety_in_auto: false # AUTO'da Nav2 costmap zaten engelleri yönetiyor; bu katman Nav2'yi geçersiz kılıyor
+    auto_emergency_stop_distance: 0.22 # sadece çok yakın gerçek acil durum (Nav2 inflation_radius=0.35m; 0.38m çok sık tetikleniyordu)
     scan_topic: "/scan"
     front_obstacle_stop_distance: 0.45 # AUTO/TELEOP ön tamponu büyüt: çarpıp gaz vermeyi azalt
     front_obstacle_clear_distance: 0.75
@@ -81,13 +81,14 @@
     failed_goal_blacklist_radius_m: 0.45 # başarısız hedefe tekrar tekrar gitme
     max_failed_goals: 20
     goal_timeout_s: 45.0           # saniye — hedef tamamlanmadan önce max bekleme
-    explore_interval_s: 1.5        # saniye — frontier güncelleme periyodu
+    explore_interval_s: 1.0        # saniye — frontier güncelleme periyodu
+    visited_penalty_radius_m: 3.5  # bu yarıçap içindeki frontierlar tekrar seçilmez
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.
-    direct_explore_speed: 0.35
-    direct_explore_turn_speed: 0.20
+    direct_explore_speed: 0.45
+    direct_explore_turn_speed: 0.30
     direct_explore_backup_speed: 0.20
     direct_explore_strafe_speed: 0.30
     direct_explore_kp: 0.46              # PID P: açık yöne dön, harita kaymasını azaltmak için yumuşak

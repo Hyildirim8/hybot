@@ -194,6 +194,7 @@ class SlamManagerNode(Node):
         self._last_btn_t: dict             = {"save": 0.0, "explore": 0.0, "reset": 0.0, "pose": 0.0}
         self._visited_positions: List[Tuple[float, float]] = []
         self._last_visited_t: float        = 0.0
+        self._user_goal_until: float       = 0.0   # RViz hedefi için keşif duraklatma
 
         # ── QoS profilleri ────────────────────────────────────────────────────
         latched = QoSProfile(
@@ -224,6 +225,9 @@ class SlamManagerNode(Node):
         self.create_subscription(OccupancyGrid, "/map",           self._map_cb,  latched)
         self.create_subscription(Bool,          "autonomous_mode", self._mode_cb, latched)
         self.create_subscription(LaserScan,     "/scan",          self._scan_cb, best_effort)
+        # RViz 2D Nav Goal → /goal_pose (bt_navigator tarafından da dinlenir).
+        # Keşif aktifken kullanıcı hedef gönderirse çakışmayı önlemek için keşif 60 s duraklatılır.
+        self.create_subscription(PoseStamped,   "/goal_pose",     self._user_goal_cb, reliable)
 
         # ── TF (frontier yön hesaplama) ───────────────────────────────────────
         self._tf_buffer   = tf2_ros.Buffer()
@@ -282,6 +286,19 @@ class SlamManagerNode(Node):
         self._prev_pose_btn = pose_on
 
     # ── Abonelik geri çağrıları ───────────────────────────────────────────────
+
+    def _user_goal_cb(self, msg: PoseStamped) -> None:
+        """RViz Nav2 Goal tespit edildi — keşif 60 saniye duraklatılır."""
+        if not self._exploring:
+            return
+        self._user_goal_until = time.monotonic() + 60.0
+        self._cancel_goal()
+        self._direct_explore_active = False
+        self._pending_frontier = None
+        self._invalidate_frontier_target()
+        self._publish_zero()
+        self.get_logger().info("RViz hedef alındı — keşif 60 s duraklatıldı")
+        self._pub_status("RViz hedef: keşif 60 s duraklatıldı")
 
     def _map_cb(self, msg: OccupancyGrid) -> None:
         self._map = msg
@@ -464,8 +481,8 @@ class SlamManagerNode(Node):
             prev_clear = esc_min[prev_idx] if esc_min[prev_idx] != math.inf else self._direct_react_distance
             next_clear = esc_min[next_idx] if esc_min[next_idx] != math.inf else self._direct_react_distance
             clearance = (0.50 * clearance) + (0.25 * min(prev_clear, self._direct_react_distance)) + (0.25 * min(next_clear, self._direct_react_distance))
-            # Ön 180°'ye bonus: 0°=+0.5, 90°=+0.25, 180°=0
-            front_bonus = 0.5 * max(0.0, 1.0 - abs(centered) / 180.0)
+            # Ön 180°'ye hafif bonus: arka yön de gerçekten boşsa seçilebilsin
+            front_bonus = 0.25 * max(0.0, 1.0 - abs(centered) / 180.0)
             escape_jump = abs(math.atan2(
                 math.sin(math.radians(centered) - self._best_escape_angle),
                 math.cos(math.radians(centered) - self._best_escape_angle),
@@ -620,6 +637,13 @@ class SlamManagerNode(Node):
             self._recovery_active = False
             self._reset_pid()
             self._publish_zero()
+        else:
+            # Keşif açıldı: TELEOP modundaysa da doğrudan başlat.
+            # _direct_explore_tick cmd_vel_nav'a komut publish eder →
+            # teleop_node auto_enable_on_nav_cmd ile AUTO'ya geçer.
+            if not self._autonomous:
+                self._autonomous = True  # iyimser; _mode_cb ile doğrulanır
+            self._enable_direct_explore("keşif başlatıldı")
 
     def _explore_tick(self) -> None:
         """Keşif zamanlayıcısı: Nav2 hedefli frontier exploration.
@@ -632,12 +656,18 @@ class SlamManagerNode(Node):
         if not self._exploring:
             return
 
-        if not self._autonomous:
-            self.get_logger().warn(
-                "Keşif için AUTO mod gerekli (Start butonuna basın)",
-                throttle_duration_sec=5.0,
-            )
+        # RViz kullanıcı hedefi aktifken bekle — doğrudan keşfe de izin verme
+        if time.monotonic() < self._user_goal_until:
             self._direct_explore_active = False
+            return
+
+        if not self._autonomous:
+            # teleop_node auto_enable_on_nav_cmd ile geçiş yapana kadar
+            # _direct_explore_tick çalışmaya devam etsin (komut publish eder → otomatik geçiş).
+            self.get_logger().warn(
+                "Keşif: AUTO mod bekleniyor (cmd_vel_nav tetikleyici gönderildi)",
+                throttle_duration_sec=2.0,
+            )
             return
 
         # Ziyaret edilen konumu periyodik kaydet (oda hafızası için)
@@ -736,7 +766,7 @@ class SlamManagerNode(Node):
         if not (self._exploring and self._autonomous):
             return
         now = time.monotonic()
-        if now - self._last_visited_t < 15.0:
+        if now - self._last_visited_t < 8.0:
             return
         try:
             tf = self._tf_buffer.lookup_transform(
@@ -844,7 +874,7 @@ class SlamManagerNode(Node):
                 continue
             score = float(len(cluster))
             if is_near_visited(target[0], target[1]):
-                score *= 0.4   # ziyaret edilmiş bölgeye 60% ceza → yeni alanları tercih et
+                score *= 0.10  # ziyaret edilmiş bölgeye 90% ceza → aynı odaya tekrar girme
             candidates.append((score, target))
 
         if not candidates:
@@ -908,9 +938,17 @@ class SlamManagerNode(Node):
             if status == 4:  # STATUS_SUCCEEDED
                 self.get_logger().info("Frontier başarıyla tamamlandı — sonraki aranıyor")
                 self._pub_status("Frontier ✓")
-                # direct_explore açma: _explore_tick bir sonraki çevrimde yeni frontier bulur.
-                # Ara boşlukta direct_explore aktif olsun ki robot beklemeden devam etsin.
                 self._enable_direct_explore("frontier tamamlandı")
+            elif status == 6:  # STATUS_CANCELED — muhtemelen RViz hedefi tarafından öncelendi
+                self.get_logger().info("Keşif hedefi iptal edildi (kullanıcı hedefi önceledi)")
+                self._pub_status("RViz hedefi aktif — keşif duraklatıldı")
+                self._user_goal_until = max(
+                    self._user_goal_until, time.monotonic() + 60.0
+                )
+                self._direct_explore_active = False
+                self._pending_frontier = None
+                self._invalidate_frontier_target()
+                self._publish_zero()
             else:
                 self.get_logger().warn(f"Nav2 hedefi başarısız (status={status})")
                 self._blacklist_active_goal()
@@ -1031,6 +1069,11 @@ class SlamManagerNode(Node):
 
     def _direct_explore_tick(self) -> None:
         if not (self._direct_fallback_enabled and self._direct_explore_active):
+            return
+        # RViz kullanıcı hedefi varken cmd_vel yayınlama — Nav2 ile çakışır
+        if time.monotonic() < self._user_goal_until:
+            self._direct_explore_active = False
+            self._publish_zero()
             return
         if not (self._exploring and self._autonomous):
             self._direct_explore_active = False
