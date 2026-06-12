@@ -95,7 +95,7 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001     # non-zero: mecanum can strafe
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 1.5
+    failure_tolerance: 5.0    # SLAM geçici yüklendiğinde TF boşluğuna dayanıklı
     progress_checker_plugins: ["progress_checker"]
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
@@ -109,7 +109,7 @@ controller_server:
     general_goal_checker:
       stateful: true
       plugin: "nav2_controller::SimpleGoalChecker"
-      xy_goal_tolerance: 0.10
+      xy_goal_tolerance: 0.08
       # Frontier exploration only needs the robot to reach the area; forcing a
       # final heading makes the rover spin in place around otherwise valid goals.
       yaw_goal_tolerance: 3.14
@@ -121,11 +121,11 @@ controller_server:
       debug_trajectory_details: false
       min_vel_x: -0.8
       min_vel_y: -0.65
-      max_vel_x:  0.65
+      max_vel_x:  0.75
       max_vel_y:  0.45
       max_vel_theta: 0.45
       min_speed_xy: 0.0
-      max_speed_xy: 0.80
+      max_speed_xy: 0.90
       min_speed_theta: 0.0
       acc_lim_x: 1.0
       acc_lim_y: 0.9
@@ -139,20 +139,20 @@ controller_server:
       sim_time: 1.2
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 1.5
-      xy_goal_tolerance: 0.10
+      transform_tolerance: 4.0    # map→odom 4 sn'ye kadar bayat olsa da çalışmaya devam et
+      xy_goal_tolerance: 0.08
       trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: true
       stateful: true
       critics: ["Oscillation", "BaseObstacle", "ObstacleFootprint",
                 "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
-      BaseObstacle.scale: 10.0
-      ObstacleFootprint.scale: 14.0  # ince engellere (sandalye ayağı) daha mesafeli geç
+      BaseObstacle.scale: 4.0
+      ObstacleFootprint.scale: 6.0   # düşürüldü: dar geçişlerde tüm yörüngeleri reddetmiyordu
       PathAlign.scale: 20.0
       PathAlign.forward_point_distance: 0.2
       GoalAlign.scale: 14.0
       GoalAlign.forward_point_distance: 0.2
-      PathDist.scale: 22.0
+      PathDist.scale: 32.0           # artırıldı: dar geçişlerde planlanan yola sıkı uy
       GoalDist.scale: 18.0
 
     # ── RPP Alternative (uncomment to use Regulated Pure Pursuit) ──────────
@@ -199,12 +199,12 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.35
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.22   # 0.35'den düşürüldü: min geçiş genişliği 0.96m→0.70m (kapı/koridor geçişi)
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        tf_filter_tolerance: 1.5
+        tf_filter_tolerance: 5.0  # scan zaman damgası ile TF arasındaki max fark; RPi DDS gecikmesi için artırıldı
         observation_sources: scan
         scan:
           topic: /scan
@@ -244,8 +244,8 @@ global_costmap:
         map_subscribe_transient_local: true
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.5
-        inflation_radius: 0.35
+        cost_scaling_factor: 2.0
+        inflation_radius: 0.22   # local costmap ile aynı — global planner da dar geçişleri görebilsin
       always_send_full_costmap: true
 
 map_server:
@@ -323,10 +323,10 @@ velocity_smoother:
     smoothing_frequency: 12.0
     scale_velocities: false
     feedback: "OPEN_LOOP"
-    max_velocity: [0.55, 0.35, 0.45]
-    min_velocity: [-0.35, -0.25, -0.45]
-    max_accel: [0.8, 0.7, 0.40]
-    max_decel: [-0.9, -0.8, -0.45]
+    max_velocity: [0.75, 0.50, 0.55]
+    min_velocity: [-0.55, -0.35, -0.55]
+    max_accel: [1.0, 0.9, 0.50]
+    max_decel: [-1.2, -1.0, -0.55]
     odom_topic: "odom"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
