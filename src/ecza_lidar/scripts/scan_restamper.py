@@ -1,7 +1,16 @@
 #!/usr/bin/env python3
-"""Restamp LaserScan messages so TF consumers do not reject stale scan times."""
+"""Restamp LaserScan messages so TF consumers do not reject stale scan times.
+
+Also drops unhealthy scans: the A2M12 on this rover intermittently produces
+near-empty revolutions (2-13 valid rays out of 720). Publishing those poisons
+SLAM matching, costmap marking and the explorer's distance estimates, so any
+scan with fewer than min_valid_fraction valid rays is discarded — consumers
+keep working from the last healthy scan.
+"""
 
 import copy
+import math
+
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
@@ -22,6 +31,7 @@ class ScanRestamper(Node):
         self.declare_parameter("slam_angle_downsample", 4)
         self.declare_parameter("max_slam_angular_z", 0.25)
         self.declare_parameter("odom_topic", "/odom")
+        self.declare_parameter("min_valid_fraction", 0.10)
 
         input_topic = self.get_parameter("input_topic").value
         output_topic = self.get_parameter("output_topic").value
@@ -35,6 +45,8 @@ class ScanRestamper(Node):
         )
         self._max_slam_angular_z = float(self.get_parameter("max_slam_angular_z").value)
         odom_topic = self.get_parameter("odom_topic").value
+        self._min_valid_fraction = float(self.get_parameter("min_valid_fraction").value)
+        self._dropped_scans = 0
         self._min_publish_ns = int(1e9 / max_publish_hz) if max_publish_hz > 0.0 else 0
         self._slam_min_publish_ns = (
             int(1e9 / slam_publish_hz) if slam_publish_hz > 0.0 else 0
@@ -64,6 +76,23 @@ class ScanRestamper(Node):
         self._angular_z = float(msg.twist.twist.angular.z)
 
     def _scan_cb(self, msg: LaserScan) -> None:
+        # Sağlıksız tarama filtresi: geçerli ışın oranı eşiğin altındaysa hiç
+        # yayınlama — SLAM/costmap/keşif son sağlıklı taramayla devam eder.
+        if self._min_valid_fraction > 0.0 and msg.ranges:
+            lo = max(0.0, msg.range_min)
+            valid = sum(
+                1 for d in msg.ranges
+                if math.isfinite(d) and lo <= d <= msg.range_max
+            )
+            if valid < len(msg.ranges) * self._min_valid_fraction:
+                self._dropped_scans += 1
+                self.get_logger().warn(
+                    f"Bozuk tarama atıldı: {valid}/{len(msg.ranges)} geçerli ışın "
+                    f"(toplam atılan: {self._dropped_scans})",
+                    throttle_duration_sec=10.0,
+                )
+                return
+
         now = self.get_clock().now()
         now_ns = now.nanoseconds
         if self._min_publish_ns and now_ns - self._last_publish_ns < self._min_publish_ns:

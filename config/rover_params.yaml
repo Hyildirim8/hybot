@@ -60,10 +60,10 @@
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
     enable_scan_safety_in_auto: false # AUTO'da Nav2 costmap zaten engelleri yönetiyor; bu katman Nav2'yi geçersiz kılıyor
-    auto_emergency_stop_distance: 0.22 # sadece çok yakın gerçek acil durum (Nav2 inflation_radius=0.35m; 0.38m çok sık tetikleniyordu)
+    auto_emergency_stop_distance: 0.15 # sadece fiziksel temas riski; 0.22 dar kapı kenarlarında geçişi kesiyordu
     scan_topic: "/scan"
-    front_obstacle_stop_distance: 0.45 # AUTO/TELEOP ön tamponu büyüt: çarpıp gaz vermeyi azalt
-    front_obstacle_clear_distance: 0.75
+    front_obstacle_stop_distance: 0.30 # 0.45 geçilebilir aralıkları da kapatıyordu — dar geçiş için düşürüldü
+    front_obstacle_clear_distance: 0.50
     front_obstacle_angle_deg: 36.0
     avoidance_turn_speed: 0.45
     avoidance_strafe_speed: 0.25
@@ -77,30 +77,34 @@
     btn_debounce_ms: 150           # buton sıçramasını önle
     map_save_dir: "/maps"          # kayıt dizini (navigation container'daki bağlama)
     frontier_min_cells: 8          # küçük frontier kümelerini görmezden gel
-    frontier_obstacle_padding_m: 0.35 # engel yakınındaki frontier hedeflerini ele
-    failed_goal_blacklist_radius_m: 0.45 # başarısız hedefe tekrar tekrar gitme
+    frontier_obstacle_padding_m: 0.20 # dar kapı/koridor frontierlarını gereksiz eleme
+    failed_goal_blacklist_radius_m: 0.32 # dar alanlarda komşu geçerli hedefleri karartma
     max_failed_goals: 20
-    goal_timeout_s: 45.0           # saniye — hedef tamamlanmadan önce max bekleme
-    explore_interval_s: 1.0        # saniye — frontier güncelleme periyodu
-    visited_penalty_radius_m: 3.5  # bu yarıçap içindeki frontierlar tekrar seçilmez
+    goal_timeout_s: 12.0           # saniye — takılan Nav2 hedefi en fazla 12 s sürebilir; 30 s "donup kalma" hissi veriyordu
+    explore_interval_s: 2.0        # saniye — frontier hesabı CPU-yoğun; 1.0 komut döngüsünü boğup kesik harekete yol açıyordu
+    visited_penalty_radius_m: 3.0  # oda boyutunda ziyaret hafızası — haritalanan odaya geri dönmeyi azalt
+                                   # (ceza tam dışlama değil ×0.02 skor; başka aday yoksa yine gidilir)
     direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.
     direct_explore_speed: 0.45
-    direct_explore_turn_speed: 0.30
+    # 0.30 dönüş köşelerden kurtulmaya yetmiyordu (recovery döngüsünde ~55°).
+    # SLAM artık dönüş sırasında da tarama aldığı için (max_slam_angular_z=0.50)
+    # 0.45 rad/s harita kalitesini bozmadan kullanılabilir.
+    direct_explore_turn_speed: 0.45
     direct_explore_backup_speed: 0.20
     direct_explore_strafe_speed: 0.30
-    direct_explore_kp: 0.46              # PID P: açık yöne dön, harita kaymasını azaltmak için yumuşak
-    direct_explore_ki: 0.01              # PID I: küçük kalıcı yön hatasını toplar
-    direct_explore_kd: 0.24              # PID D: ani yön değişimlerini sönümler
-    direct_explore_pid_i_limit: 0.25     # integral rüzgarını sınırla
-    direct_explore_lookahead_deg: 80.0   # açık yön arama açısı (±40°)
+    direct_explore_kp: 0.90              # PID P: dar geçişte boşluk merkezine hızlı ve kararlı yönelme
+    direct_explore_ki: 0.0               # PID I: hedef açı sürekli değişiyor — integral salınım yapıyordu, kapatıldı
+    direct_explore_kd: 0.18              # PID D: sönümleme; 0.24 P'yi fazla bastırıyordu
+    direct_explore_pid_i_limit: 0.25     # integral rüzgarını sınırla (ki=0 iken etkisiz)
+    direct_explore_lookahead_deg: 140.0  # açık yön arama açısı (±70°) — ±40° dardı: açık taraf koni dışındaysa robot duvara bakakalıyordu
     direct_explore_react_distance: 2.0   # sadece 2m içindeki engeller yönü etkiler
-    min_side_clearance_m: 0.15          # dar koridor: her iki yan < 0.15m → çok dar
-    direct_explore_stop_distance: 0.55  # ince engeller için daha geniş tampon
-    direct_explore_escape_distance: 0.36 # kaçış mesafesi
-    direct_explore_front_angle_deg: 60.0  # check ±30° forward cone
+    min_side_clearance_m: 0.12          # dar koridor: her iki yan < 0.12m → çok dar
+    direct_explore_stop_distance: 0.28  # 0.42 geçilebilir kapılarda bile duruyordu — "geçemiyor" şikayeti üzerine düşürüldü
+    direct_explore_escape_distance: 0.18 # kaçış sadece gerçekten sıkışınca tetiklensin
+    direct_explore_front_angle_deg: 40.0  # ±20° ön koni: kapı kenarları "ön engel" sayılmasın
     direct_explore_recovery_backup_time_s: 1.1   # recovery faz-1: geri çekil süresi (0.9 → 1.1 daha geniş açılır)
     direct_explore_recovery_rotate_time_s: 3.2   # recovery faz-2: düşük hızla ~90°+ dönüş için
 

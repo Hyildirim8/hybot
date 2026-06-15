@@ -63,10 +63,18 @@ def generate_launch_description() -> LaunchDescription:
             "frame_id": LaunchConfiguration("frame_id"),
             "max_publish_hz": 8.0,
             "angle_downsample": 2,
-            "slam_publish_hz": 2.5,
-            "slam_angle_downsample": 4,
-            "max_slam_angular_z": 0.07,
+            "slam_publish_hz": 5.0,
+            "slam_angle_downsample": 2,
+            # Dönüş sırasında SLAM'i aç bırak: scan matcher dönüş hatasını ancak
+            # tarama görürse düzeltebilir. 0.07 tüm dönüşleri susturuyordu →
+            # dönüş kayması odometriden birikip duvarları çiftliyordu.
+            # 0.65: otonom dönüşler (≤0.45 rad/s) ve yavaş manuel dönüşler geçer; çok hızlı spin (1.8) gate'lenir.
+            # 0.50 düşüktü — manuel çevirme sırasında SLAM hiç tarama alamıyordu → dönüş sonrası büyük açısal boşluk.
+            "max_slam_angular_z": 0.65,
             "odom_topic": "/odom",
+            # A2M12 aralıklı olarak neredeyse boş tarama üretiyor (720'de 2-13
+            # geçerli ışın). Bunlar SLAM/costmap/keşfi zehirliyor — at.
+            "min_valid_fraction": 0.10,
         }],
     )
 

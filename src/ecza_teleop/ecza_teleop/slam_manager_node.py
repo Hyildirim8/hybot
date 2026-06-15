@@ -33,6 +33,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 import tf2_ros
 
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
+from action_msgs.srv import CancelGoal
 from nav_msgs.msg import OccupancyGrid
 from sensor_msgs.msg import Joy, LaserScan
 from nav2_msgs.srv import SaveMap as Nav2SaveMap
@@ -162,6 +163,7 @@ class SlamManagerNode(Node):
         self._escape_turn_sign: float      = 0.0        # kalıcı dönüş yönü (sallanmayı önle)
         self._frontier_target_angle: Optional[float] = None  # robot frame frontier açısı
         self._best_open_angle: float       = 0.0        # P-kontrolcü hedef açısı (±70°, robot çerçevesi)
+        self._best_open_clearance: float   = math.inf   # seçilen sektörün açıklığı — hepsi kapalıysa kaçış tetikler
         self._best_escape_angle: float     = 0.0        # Kaçış için en açık yön (360°, ön öncelikli)
         self._smooth_angle: float          = 0.0        # düşük geçişli filtrelenmiş hedef açı
         self._recovery_active: bool        = False
@@ -239,6 +241,10 @@ class SlamManagerNode(Node):
 
         # ── Nav2 aksiyon istemcisi (keşif hedefleri) ─────────────────────────
         self._nav = ActionClient(self, NavigateToPose, "navigate_to_pose")
+        # Cancel-all istemcisi: boş CancelGoal isteği sunucudaki TÜM hedefleri
+        # iptal eder (RViz hedefleri dahil) — TELEOP'a geçişte kullanılır.
+        self._nav_cancel_cli = self.create_client(
+            CancelGoal, "navigate_to_pose/_action/cancel_goal")
 
         # ── Keşif zamanlayıcısı ───────────────────────────────────────────────
         self._explore_timer = self.create_timer(explore_interval, self._explore_tick)
@@ -313,6 +319,7 @@ class SlamManagerNode(Node):
             m.data = False
             self._exploring_pub.publish(m)
             self._cancel_goal()
+            self._cancel_all_nav_goals()
             self._direct_explore_active = False
             self._pending_frontier = None
             self._invalidate_frontier_target()
@@ -350,6 +357,7 @@ class SlamManagerNode(Node):
         _NARROW_RAD = math.radians(15.0)
         narrow_total = 0
         narrow_valid = 0
+        front_region_min = math.inf  # ±60° içindeki en yakın GEÇERLİ ışın (körlük doğrulama)
 
         for i, distance in enumerate(msg.ranges):
             # Açıyı ve shifted'ı erken hesapla — inf ışınlar dahil her şeyi sayabilmek için.
@@ -375,6 +383,8 @@ class SlamManagerNode(Node):
 
             if abs(shifted) <= half_angle:
                 front = min(front, float(distance))
+            if abs(shifted) <= math.radians(60.0):
+                front_region_min = min(front_region_min, float(distance))
 
             # Left/right clearance sectors use shifted angle so they are in robot frame.
             # positive shifted angle = robot left (+Y), negative = robot right (-Y).
@@ -417,6 +427,29 @@ class SlamManagerNode(Node):
             and 0 < narrow_valid < narrow_total * 0.40
         )
 
+        # Duvara yapışık körlük: ön konide ışınların neredeyse hepsi geçersizse
+        # VE ±60° içindeki en yakın geçerli ışın < 0.45 m ise duvar lidar min
+        # menzilinin içindedir → önü dolu say, yön puanlamasındaki ön sektörleri
+        # de doldur. Yakınlık kanıtı şart: açık alanda uzak/koyu yüzeyler de
+        # geçersiz ışın döndürür — kanıtsız körlük robotu açık alanda donduruyordu.
+        front_blind = (
+            narrow_total >= 20
+            and narrow_valid <= max(2, int(narrow_total * 0.10))
+            and front_region_min < 0.45
+        )
+        if front_blind:
+            front = min(front, 0.10)
+            if n_sectors > 0:
+                _sw = 2.0 * lookahead / n_sectors
+                for si in range(n_sectors):
+                    if abs(-lookahead + (si + 0.5) * _sw) <= _NARROW_RAD:
+                        sector_min[si] = min(sector_min[si], 0.05)
+            for ei in range(_N_ESC):
+                _cd = (ei + 0.5) * _ESC_DEG
+                _cc = _cd if _cd <= 180.0 else _cd - 360.0
+                if abs(_cc) <= 20.0:
+                    esc_min[ei] = min(esc_min[ei], 0.05)
+
         # En açık sektör: en büyük minimum mesafeye sahip sektör.
         # Sensörü gelmeyen sektör (açık alan) react_distance ile puanlanır.
         # İleri yön önyargısı: eşit puanlı sektörlerde orta (düz) sektörü tercih et.
@@ -458,14 +491,17 @@ class SlamManagerNode(Node):
                 frontier_bias = 0.0
                 if ft_idx is not None:
                     dist_ft = abs(i - ft_idx)
-                    frontier_bias = 0.40 * max(0.0, 1.0 - dist_ft / max(1, n_sectors // 4))
+                    frontier_bias = 0.55 * max(0.0, 1.0 - dist_ft / max(1, n_sectors // 4))
                 total_score = score + fwd_bias + frontier_bias + inertia_bias
                 if total_score > best_score:
                     best_score = total_score
                     best_idx = i
             self._best_open_angle = -lookahead + (best_idx + 0.5) * sector_width
+            _bc = sector_min[best_idx] if sector_min[best_idx] != math.inf else self._direct_react_distance
+            self._best_open_clearance = min(_bc, self._direct_react_distance)
         else:
             self._best_open_angle = 0.0
+            self._best_open_clearance = self._direct_react_distance
 
         # En açık kaçış yönü (360°, ön 180° öncelikli)
         best_esc_score = -1.0
@@ -481,8 +517,9 @@ class SlamManagerNode(Node):
             prev_clear = esc_min[prev_idx] if esc_min[prev_idx] != math.inf else self._direct_react_distance
             next_clear = esc_min[next_idx] if esc_min[next_idx] != math.inf else self._direct_react_distance
             clearance = (0.50 * clearance) + (0.25 * min(prev_clear, self._direct_react_distance)) + (0.25 * min(next_clear, self._direct_react_distance))
-            # Ön 180°'ye hafif bonus: arka yön de gerçekten boşsa seçilebilsin
-            front_bonus = 0.25 * max(0.0, 1.0 - abs(centered) / 180.0)
+            # Ön yön güçlü bonus: önü boşsa kaçış İLK önce ileriyi seçsin
+            # (kullanıcı tercihi). Arka yönler ancak ön gerçekten kapalıyken kazanır.
+            front_bonus = 0.50 * max(0.0, 1.0 - abs(centered) / 180.0)
             escape_jump = abs(math.atan2(
                 math.sin(math.radians(centered) - self._best_escape_angle),
                 math.cos(math.radians(centered) - self._best_escape_angle),
@@ -681,8 +718,20 @@ class SlamManagerNode(Node):
             self._send_goal(frontier[0], frontier[1])
             return
 
-        # ── 2. Nav2 aktif geziyorsa — sadece timeout izle ────────────────────
+        # ── 2. Nav2 aktif geziyorsa — sıkışma ve timeout izle ────────────────
         if self._goal_handle is not None:
+            # Duvara sıkışma tespiti: Nav2 hedefi sürerken ön mesafe kaçış
+            # eşiğine indiyse DWB oradan çıkamaz (tüm yörüngeler çarpışmada
+            # görünür, geri dahil) ve robot timeout'a kadar donup kalıyordu.
+            # Hedefi hemen iptal et — direct explore'un geri çekilme kaçışı
+            # devralsın; hedef kara listeye GİRMEZ (konumun suçu değil).
+            if self._front_obstacle_distance <= self._direct_escape_distance * 1.3:
+                self.get_logger().warn(
+                    f"Nav2 sürerken engele sıkışıldı (ön={self._front_obstacle_distance:.2f}m)"
+                    " — hedef iptal, kaçış devralıyor")
+                self._cancel_goal()
+                self._enable_direct_explore("engele sıkışma")
+                return
             elapsed = time.monotonic() - self._goal_sent_at
             if elapsed > self._goal_timeout:
                 self.get_logger().warn(
@@ -874,7 +923,8 @@ class SlamManagerNode(Node):
                 continue
             score = float(len(cluster))
             if is_near_visited(target[0], target[1]):
-                score *= 0.10  # ziyaret edilmiş bölgeye 90% ceza → aynı odaya tekrar girme
+                score *= 0.02  # ziyaret edilmiş bölgeye %98 ceza → haritalanan odaya geri dönme;
+                               # başka aday kalmazsa yine de seçilebilir (tam dışlama değil)
             candidates.append((score, target))
 
         if not candidates:
@@ -911,17 +961,27 @@ class SlamManagerNode(Node):
         )
 
     def _on_goal_accepted(self, future, target: Tuple[float, float]) -> None:
-        if not (self._exploring and self._autonomous):
-            return
         try:
             handle = future.result()
         except Exception as exc:
             self.get_logger().warn(f"Keşif hedefi gönderilemedi: {exc}")
-            self._enable_direct_explore("hedef gönderilemedi")
+            if self._exploring and self._autonomous:
+                self._enable_direct_explore("hedef gönderilemedi")
+            return
+        if not (self._exploring and self._autonomous):
+            # Mod değişti / keşif kapandı: kabul edilen hedefi SAHİPSİZ BIRAKMA.
+            # Önceden handle iptal edilmeden dönülüyordu → Nav2 hedefi sürmeye
+            # devam ediyor, DWB komut basıyor, 5 s soğuma bitince auto_enable
+            # modu tekrar AUTO'ya çeviriyordu ("Start ile AUTO'dan çıkamama").
+            if getattr(handle, "accepted", False):
+                handle.cancel_goal_async()
+                self.get_logger().info("Mod değişti — kabul edilen keşif hedefi iptal edildi")
             return
         if not handle.accepted:
-            self.get_logger().warn("Keşif hedefi reddedildi — fallback")
-            self._failed_goals.append(target)
+            # Reddedilme hedef konumunun kötü olduğunu göstermez — neredeyse her
+            # zaman bt_navigator henüz aktif değil demektir. Kara listeye ALMA;
+            # yoksa Nav2 açılırken tüm geçerli frontierlar kalıcı karartılıyor.
+            self.get_logger().warn("Keşif hedefi reddedildi (Nav2 hazır değil?) — fallback")
             self._active_goal = None
             self._enable_direct_explore("hedef reddedildi")
             return
@@ -939,16 +999,24 @@ class SlamManagerNode(Node):
                 self.get_logger().info("Frontier başarıyla tamamlandı — sonraki aranıyor")
                 self._pub_status("Frontier ✓")
                 self._enable_direct_explore("frontier tamamlandı")
-            elif status == 6:  # STATUS_CANCELED — muhtemelen RViz hedefi tarafından öncelendi
-                self.get_logger().info("Keşif hedefi iptal edildi (kullanıcı hedefi önceledi)")
-                self._pub_status("RViz hedefi aktif — keşif duraklatıldı")
-                self._user_goal_until = max(
-                    self._user_goal_until, time.monotonic() + 60.0
-                )
-                self._direct_explore_active = False
-                self._pending_frontier = None
-                self._invalidate_frontier_target()
-                self._publish_zero()
+            elif status == 6:  # STATUS_CANCELED
+                if time.monotonic() < self._user_goal_until:
+                    # Gerçek RViz hedefi öncelemesi (/goal_pose alındı) — duraklat.
+                    self.get_logger().info("Keşif hedefi iptal edildi (kullanıcı hedefi önceledi)")
+                    self._pub_status("RViz hedefi aktif — keşif duraklatıldı")
+                    self._user_goal_until = max(
+                        self._user_goal_until, time.monotonic() + 60.0
+                    )
+                    self._direct_explore_active = False
+                    self._pending_frontier = None
+                    self._invalidate_frontier_target()
+                    self._publish_zero()
+                else:
+                    # Mod değişimi / zaman aşımı iptali — kullanıcı hedefi YOK.
+                    # Önceden bu dal keşfi 60 s donduruyordu ("olduğu yerde kalma").
+                    self.get_logger().info("Keşif hedefi iptal edildi — keşfe devam")
+                    if self._exploring and self._autonomous:
+                        self._enable_direct_explore("hedef iptal edildi")
             else:
                 self.get_logger().warn(f"Nav2 hedefi başarısız (status={status})")
                 self._blacklist_active_goal()
@@ -966,6 +1034,16 @@ class SlamManagerNode(Node):
             self._goal_handle.cancel_goal_async()
             self._goal_handle = None
         self._active_goal = None
+
+    def _cancel_all_nav_goals(self) -> None:
+        """Nav2'deki TÜM navigate_to_pose hedeflerini iptal et (RViz dahil).
+
+        TELEOP'a geçişte çağrılır: kullanıcı Start'a bastıysa hiçbir Nav2
+        hedefi sürmeye devam etmemeli — aksi hâlde DWB komut basmaya devam
+        edip auto_enable_on_nav_cmd ile modu tekrar AUTO'ya çeviriyor.
+        """
+        if self._nav_cancel_cli.service_is_ready():
+            self._nav_cancel_cli.call_async(CancelGoal.Request())
 
     def _enable_direct_explore(self, reason: str) -> None:
         if not self._direct_fallback_enabled:
@@ -1051,9 +1129,9 @@ class SlamManagerNode(Node):
         """360° kaçış açısına göre yana kay; uygun değilse normal açıklığı kullan."""
         if abs(self._best_escape_angle) > math.radians(20.0):
             side = 1.0 if self._best_escape_angle > 0.0 else -1.0
-            if side > 0.0 and self._side_left_clearance > 0.24:
+            if side > 0.0 and self._side_left_clearance > 0.18:
                 return side * self._direct_strafe_speed * 1.20 * self._strafe_h
-            if side < 0.0 and self._side_right_clearance > 0.24:
+            if side < 0.0 and self._side_right_clearance > 0.18:
                 return side * self._direct_strafe_speed * 1.20 * self._strafe_h
         return fallback_y
 
@@ -1097,8 +1175,15 @@ class SlamManagerNode(Node):
         too_narrow   = narrow_left and narrow_right
         back_blocked = self._back_obstacle_distance < 0.26
 
-        # Debounce: tek bir hatalı lidar okuması recovery başlatmasın
-        raw_trouble = front_escape or too_narrow
+        # Debounce: tek bir hatalı lidar okuması recovery başlatmasın.
+        # Üçüncü koşul: önde duvar VAR ve ±70° içinde hiçbir açık yön YOK →
+        # dönerek çözüm bulunamaz, kaçışa geç (360° arama açık yarıyı bulur).
+        # Bu olmadan robot "yarısı boş duvar" önünde sıfır hata ile bakakalıyordu.
+        no_open_direction = (
+            front_dist <= eff_stop
+            and self._best_open_clearance <= eff_stop
+        )
+        raw_trouble = front_escape or too_narrow or no_open_direction
         if raw_trouble:
             self._trouble_count = min(self._trouble_count + 1, 4)
         else:
@@ -1110,7 +1195,7 @@ class SlamManagerNode(Node):
         # Minimum 0.32 m yoksa o yana kayma — daha az çarpma riski.
         # ROS convention (+y=sol, -y=sağ). teleop_node gerekirse AUTO
         # lateral yönünü auto_strafe_invert ile tek noktada çevirir.
-        _STRAFE_MIN = 0.24
+        _STRAFE_MIN = 0.18   # dar geçişlerde yana kayabilme — 0.24 kapı kenarlarında strafe'i kilitiyordu
         side_r = self._side_right_clearance if math.isfinite(self._side_right_clearance) else 10.0
         side_l = self._side_left_clearance  if math.isfinite(self._side_left_clearance)  else 10.0
         can_strafe_right = side_r > _STRAFE_MIN
@@ -1143,6 +1228,15 @@ class SlamManagerNode(Node):
                     # Çevrim bitti, engel temizlendi — serbest sürüşe geç
                     self._reset_recovery()
                     should_recover = False
+            # Önü boşsa İLK oraya git: geri çekilme fazı bitti, sorun kalmadı ve
+            # ön gerçekten açıldıysa dönüş fazını atla — serbest sürüş düz çıksın.
+            if (should_recover
+                    and elapsed >= self._recovery_backup_time
+                    and not in_trouble
+                    and front_dist >= eff_stop * 1.2
+                    and abs(self._best_escape_angle) <= math.radians(20.0)):
+                self._reset_recovery()
+                should_recover = False
 
         if should_recover:
             # ── Sensor-driven escape ───────────────────────────────────────────
@@ -1192,15 +1286,19 @@ class SlamManagerNode(Node):
                 if min(side_l, side_r) < 0.40:
                     cmd.linear.y = strafe_y * 0.35
             else:
-                # Stop zone (eff_escape < front < eff_stop): ileri gitme, dön + tam yana kayma.
-                # Mecanum strafing ile köşe etrafında kaymak dönmeden çok daha hızlı.
-                cmd.linear.x  = 0.0
+                # Stop zone (eff_escape < front < eff_stop): dön + yana kay.
+                # Dar geçiş istisnası: seçilen açık yön neredeyse düz önde VE
+                # gerçekten açıksa (kapı boşluğu) tam durma — sürünerek geç.
+                # Tam durmak kapı eşiğinde kilitlenme yaratıyordu.
+                creep = (abs(error) <= math.radians(15.0)
+                         and self._best_open_clearance >= eff_stop * 1.5)
+                cmd.linear.x  = self._direct_speed * 0.40 if creep else 0.0
                 cmd.angular.z = self._pid_turn(
                     error,
                     self._direct_turn_speed,
                     gain_scale=1.0,
                 )
-                cmd.linear.y  = strafe_y
+                cmd.linear.y  = strafe_y * (0.5 if creep else 1.0)
 
         cmd = self._apply_velocity_smoothing(cmd, emergency=in_trouble)
         self._cmd_pub.publish(cmd)

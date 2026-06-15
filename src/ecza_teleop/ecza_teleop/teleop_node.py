@@ -46,7 +46,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import Joy, LaserScan
 from std_msgs.msg import Bool
 
@@ -155,6 +155,16 @@ class TeleopNode(Node):
         self._prev_auto_btn = False       # edge-detect across primary/alt buttons
         self._last_mode_toggle_time = 0.0
         self._handoff_stop_until = 0.0
+        # Manuel TELEOP geçişinden sonra auto_enable_on_nav_cmd soğuma süresi:
+        # smoother kuyruğundaki Nav2 komutları Start'a basıldıktan hemen sonra
+        # modu tekrar AUTO'ya çeviriyordu → kullanıcı AUTO'dan çıkamıyordu.
+        self._nav_auto_enable_blocked_until = 0.0
+        # Manuel TELEOP kilidi: Start ile TELEOP'a geçiş MUTLAKTIR. Hiçbir Nav2
+        # komutu modu geri AUTO'ya çeviremez. Kilit yalnızca iki açık kullanıcı
+        # eylemiyle kalkar: Start'a tekrar basmak veya A ile keşfi açmak
+        # (slam_manager/exploring=True). Soğuma süresi tek başına yetmiyordu —
+        # komut akışı 5 s'den uzun sürünce mod yine geri dönüyordu.
+        self._manual_teleop_lock = False
         self._axes_ready = not self._reject_extreme_axis_startup
         self._front_blocked = False
         self._front_obstacle_distance = math.inf
@@ -194,11 +204,23 @@ class TeleopNode(Node):
         self._nav_sub = self.create_subscription(
             Twist, self._nav_cmd_topic, self._nav_cmd_cb, reliable_qos
         )
+        # Keşif durumu (slam_manager A butonu): keşif AÇILDIĞINDA manuel kilidi
+        # kaldırıp AUTO'ya geç — kullanıcının açık niyeti.
+        self._exploring_sub = self.create_subscription(
+            Bool, "slam_manager/exploring", self._exploring_cb, latched_qos
+        )
         self._scan_sub = None
         if self._enable_scan_safety:
             self._scan_sub = self.create_subscription(
                 LaserScan, self._scan_topic, self._scan_cb, best_effort_qos
             )
+        # RViz "2D Nav Goal" publishes to /goal_pose — treat this as an explicit
+        # user intent to navigate. Clear the manual teleop lock and enter AUTO mode
+        # so the robot actually responds even if the user previously pressed Start
+        # to return to TELEOP mode.
+        self._goal_pose_sub = self.create_subscription(
+            PoseStamped, "/goal_pose", self._goal_pose_cb, reliable_qos
+        )
 
         # Publish initial mode (TELEOP) immediately so late subscribers see it.
         self._publish_mode()
@@ -289,13 +311,11 @@ class TeleopNode(Node):
         left_clearance = math.inf
         right_clearance = math.inf
         half_angle = max(0.0, self._front_angle_rad / 2.0)
+        front_total = 0   # ön konideki tüm ışınlar (geçersizler dahil)
+        front_valid = 0   # ön konide geçerli mesafe döndüren ışınlar
+        front_region_min = math.inf  # ±60° içindeki en yakın GEÇERLİ ışın
 
         for i, distance in enumerate(msg.ranges):
-            if not math.isfinite(distance):
-                continue
-            if distance < max(0.0, msg.range_min) or distance > msg.range_max:
-                continue
-
             angle = msg.angle_min + (i * msg.angle_increment)
             angle = math.atan2(math.sin(angle), math.cos(angle))
 
@@ -306,8 +326,20 @@ class TeleopNode(Node):
                 math.sin(angle - self._lidar_angle_offset_rad),
                 math.cos(angle - self._lidar_angle_offset_rad),
             )
-            if abs(shifted) <= half_angle:
+            in_front = abs(shifted) <= half_angle
+            if in_front:
+                front_total += 1
+
+            if not math.isfinite(distance):
+                continue
+            if distance < max(0.0, msg.range_min) or distance > msg.range_max:
+                continue
+
+            if in_front:
+                front_valid += 1
                 min_distance = min(min_distance, float(distance))
+            if abs(shifted) <= math.radians(60.0):
+                front_region_min = min(front_region_min, float(distance))
 
             # Left/right clearance sectors use shifted angle so they are in robot frame.
             # positive shifted angle = robot left (+Y), negative = robot right (-Y).
@@ -315,6 +347,16 @@ class TeleopNode(Node):
                 left_clearance = min(left_clearance, float(distance))
             elif -math.radians(110.0) <= shifted < 0.0:
                 right_clearance = min(right_clearance, float(distance))
+
+        # Duvara yapışık körlük: ön konideki ışınların neredeyse tamamı geçersizse
+        # VE ±60° içindeki en yakın geçerli ışın < 0.45 m ise duvar lidar min
+        # menzilinin içindedir → önü sıfır mesafede DOLU say (acil durdurma).
+        # Yakınlık kanıtı şart: açık alanda uzak/koyu yüzeyler de geçersiz ışın
+        # döndürür — kanıtsız körlük "0.10 m engel" sanılıp robotu donduruyordu.
+        if (front_total >= 12
+                and front_valid <= max(2, int(front_total * 0.10))
+                and front_region_min < 0.45):
+            min_distance = min(min_distance, 0.10)
 
         self._front_obstacle_distance = min_distance
         if min_distance <= self._front_stop_distance:
@@ -391,6 +433,14 @@ class TeleopNode(Node):
             self._autonomous = not self._autonomous
             self._last_mode_toggle_time = now_s
             self._handoff_stop_until = now_s + max(0.0, self._mode_handoff_stop_s)
+            if not self._autonomous:
+                # Start ile TELEOP'a geçildi: kilitle — Nav2 komutları modu
+                # geri çeviremez. Soğuma süresi de yedek olarak kalsın.
+                self._manual_teleop_lock = True
+                self._nav_auto_enable_blocked_until = now_s + 5.0
+            else:
+                # Start ile AUTO'ya geçildi: kilit kalkar.
+                self._manual_teleop_lock = False
             self._publish_mode()
             # Always stop the robot on any transition so neither Nav2 nor
             # the joystick leaves the wheels spinning during the handoff.
@@ -408,6 +458,8 @@ class TeleopNode(Node):
             if since_toggle > 1.5 and self._operator_takeover_requested(msg):
                 self._autonomous = False
                 self._last_mode_toggle_time = now_s
+                self._manual_teleop_lock = True
+                self._nav_auto_enable_blocked_until = now_s + 5.0
                 self._publish_mode()
                 self._publish_zero()
                 self.get_logger().warn("Operator joystick takeover -> TELEOP")
@@ -475,17 +527,46 @@ class TeleopNode(Node):
         twist.angular.z = wz
         self._publish_cmd(self._apply_scan_safety(twist))
 
+    def _goal_pose_cb(self, msg: PoseStamped) -> None:
+        """RViz 2D Nav Goal: açık navigasyon isteği — manuel kilidi kaldır, AUTO'ya geç."""
+        if self._manual_teleop_lock:
+            self._manual_teleop_lock = False
+            self.get_logger().info("RViz hedef alındı — manuel TELEOP kilidi kaldırıldı")
+        if not self._autonomous:
+            self._autonomous = True
+            self._last_mode_toggle_time = time.monotonic()
+            self._handoff_stop_until = 0.0
+            self._publish_mode()
+            self.get_logger().info("RViz hedef → AUTONOMOUS (Nav2)")
+
+    def _exploring_cb(self, msg: Bool) -> None:
+        """A butonu ile keşif açıldı: manuel kilidi kaldır, AUTO'ya geç."""
+        if not msg.data:
+            return
+        self._manual_teleop_lock = False
+        if not self._autonomous:
+            self._autonomous = True
+            self._last_mode_toggle_time = time.monotonic()
+            self._handoff_stop_until = 0.0
+            self._publish_mode()
+            self.get_logger().info("Keşif açıldı (A) -> AUTONOMOUS (Nav2)")
+
     def _nav_cmd_cb(self, msg: Twist) -> None:
         if (
             self._auto_enable_on_nav_cmd
             and not self._autonomous
+            and not self._manual_teleop_lock
             and self._twist_has_motion(msg)
+            and time.monotonic() >= self._nav_auto_enable_blocked_until
         ):
             self._autonomous = True
             self._last_mode_toggle_time = time.monotonic()
             self._handoff_stop_until = 0.0
             self._publish_mode()
-            self.get_logger().info("Nav2 command received -> AUTONOMOUS (Nav2)")
+            self.get_logger().info(
+                "Nav2 command received -> AUTONOMOUS (Nav2) "
+                f"(vx={msg.linear.x:.3f} vy={msg.linear.y:.3f} wz={msg.angular.z:.3f})"
+            )
 
         # Forward Nav2 velocity commands only while in AUTO mode.
         if self._autonomous and time.monotonic() >= self._handoff_stop_until:

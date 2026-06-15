@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<!--
+  navigate_to_pose_w_recovery.xml — navigate_to_pose with costmap-clear recovery.
+
+  Replaces navigate_to_pose_simple.xml. Difference: planner/controller failures
+  no longer abort the goal immediately. Each stage retries after clearing its
+  costmap, and the whole pipeline gets up to 6 outer retries with both costmaps
+  cleared in between. No physical recovery (Spin/BackUp) is used, so frontier
+  exploration via slam_manager keeps its "fail fast, blacklist, move on"
+  behaviour bounded by goal_timeout_s.
+
+  Plugins required (registered in nav2_params.yaml plugin_lib_names):
+    nav2_rate_controller_bt_node
+    nav2_pipeline_sequence_bt_node
+    nav2_recovery_node_bt_node
+    nav2_clear_costmap_service_bt_node
+    nav2_compute_path_to_pose_action_bt_node
+    nav2_follow_path_action_bt_node
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+      <PipelineSequence name="NavigateWithReplanning">
+        <RateController hz="1.0">
+          <RecoveryNode number_of_retries="2" name="ComputePathToPose">
+            <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+            <ClearEntireCostmap name="ClearGlobalCostmap-Context"
+                                service_name="global_costmap/clear_entirely_global_costmap"/>
+          </RecoveryNode>
+        </RateController>
+        <RecoveryNode number_of_retries="2" name="FollowPath">
+          <FollowPath path="{path}" controller_id="FollowPath"/>
+          <ClearEntireCostmap name="ClearLocalCostmap-Context"
+                              service_name="local_costmap/clear_entirely_local_costmap"/>
+        </RecoveryNode>
+      </PipelineSequence>
+      <Sequence name="RecoveryActions">
+        <ClearEntireCostmap name="ClearLocalCostmap-Subtree"
+                            service_name="local_costmap/clear_entirely_local_costmap"/>
+        <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
+                            service_name="global_costmap/clear_entirely_global_costmap"/>
+      </Sequence>
+    </RecoveryNode>
+  </BehaviorTree>
+</root>

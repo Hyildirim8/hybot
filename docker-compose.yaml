@@ -308,6 +308,7 @@ services:
       - ./src/ecza_navigation/config/slam_params.yaml:/ws/install/share/ecza_navigation/config/slam_params.yaml:ro
       - ./src/ecza_navigation/config/navigate_through_poses_no_recovery.xml:/ws/install/share/ecza_navigation/config/navigate_through_poses_no_recovery.xml:ro
       - ./src/ecza_navigation/config/navigate_to_pose_simple.xml:/ws/install/share/ecza_navigation/config/navigate_to_pose_simple.xml:ro
+      - ./src/ecza_navigation/config/navigate_to_pose_w_recovery.xml:/ws/install/share/ecza_navigation/config/navigate_to_pose_w_recovery.xml:ro
       - ./src/ecza_navigation/launch/nav2_navigation.launch.py:/ws/install/share/ecza_navigation/launch/nav2_navigation.launch.py:ro
     command:
       - bash
