@@ -28,6 +28,7 @@ import rclpy
 import rclpy.duration
 import rclpy.time
 from rclpy.action import ActionClient
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 import tf2_ros
@@ -165,11 +166,17 @@ class SlamManagerNode(Node):
         self._best_open_angle: float       = 0.0        # P-kontrolcü hedef açısı (±70°, robot çerçevesi)
         self._best_open_clearance: float   = math.inf   # seçilen sektörün açıklığı — hepsi kapalıysa kaçış tetikler
         self._best_escape_angle: float     = 0.0        # Kaçış için en açık yön (360°, ön öncelikli)
-        self._smooth_angle: float          = 0.0        # düşük geçişli filtrelenmiş hedef açı
+        self._smooth_angle: float          = 0.0
         self._recovery_active: bool        = False
         self._recovery_started_at: float   = 0.0
         self._recovery_turn_sign: float    = 0.0
-        self._trouble_count: int           = 0    # debounce: 2 ardışık tick gerekir
+        self._trouble_count: int           = 0    # debounce: 1 ardışık tick gerekir
+        # Approach velocity: tracks how fast the front obstacle is closing (m/s).
+        # Used to scale the effective stop distance — a wall 0.55 m away but
+        # closing at 0.4 m/s needs the same urgency as a wall at 0.25 m at rest.
+        self._prev_front_dist: float    = math.inf
+        self._front_approach_vel: float = 0.0      # positive = obstacle approaching
+        self._last_scan_t: float        = 0.0
         # Velocity smoothing — exponential low-pass filter at 10 Hz
         # Eliminates sharp step-changes in velocity commands; PID-like ramp behaviour.
         self._smooth_vx: float = 0.0
@@ -530,6 +537,24 @@ class SlamManagerNode(Node):
                 best_esc_score = score
                 best_esc_angle = math.radians(centered)
         self._best_escape_angle = best_esc_angle
+
+        # Approach velocity: d(front_dist)/dt, smoothed to reject single-sample spikes.
+        # Only computed when both current and previous readings are finite (no open-air→wall jumps).
+        now_scan = time.monotonic()
+        if (self._last_scan_t > 0.0
+                and math.isfinite(front)
+                and math.isfinite(self._prev_front_dist)):
+            dt_s = max(0.02, min(0.5, now_scan - self._last_scan_t))
+            raw_vel = (self._prev_front_dist - front) / dt_s  # positive = closing
+            # Heavy low-pass (α=0.25): reject momentary lidar spikes
+            self._front_approach_vel = (0.25 * raw_vel
+                                        + 0.75 * self._front_approach_vel)
+            self._front_approach_vel = max(-2.0, min(3.0, self._front_approach_vel))
+        elif not math.isfinite(front):
+            # Obstacle disappeared — decay approach velocity toward zero
+            self._front_approach_vel *= 0.7
+        self._prev_front_dist = front
+        self._last_scan_t = now_scan
 
         self._front_obstacle_distance = front
         self._left_clearance = left
@@ -1166,8 +1191,15 @@ class SlamManagerNode(Node):
         # Sandalye ayağı gibi cisimler lidar ışınlarını sıkça yansıtır/geçirir.
         _sparse = (self._front_sparse
                    and front_dist < 1.5 * self._direct_stop_distance)
-        eff_stop   = self._direct_stop_distance   * (1.30 if _sparse else 1.0)
-        eff_escape = self._direct_escape_distance * (1.30 if _sparse else 1.0)
+        sparse_f = 1.30 if _sparse else 1.0
+
+        # Scale stop/escape distances by approach velocity so a closing obstacle
+        # triggers avoidance at the same time-to-contact regardless of current range.
+        # approach_vel > 0 means obstacle is getting closer; cap at 2.0 m/s.
+        approach_penalty = max(0.0, min(2.0, self._front_approach_vel))
+        vel_factor = 1.0 + 3.5 * approach_penalty   # e.g. 0.1 m/s → 35% extra distance
+        eff_stop   = self._direct_stop_distance   * sparse_f * vel_factor
+        eff_escape = self._direct_escape_distance * sparse_f * min(vel_factor, 1.8)
 
         front_escape = front_dist <= eff_escape
         narrow_left  = self._side_left_clearance < self._min_side_clearance
@@ -1175,10 +1207,6 @@ class SlamManagerNode(Node):
         too_narrow   = narrow_left and narrow_right
         back_blocked = self._back_obstacle_distance < 0.26
 
-        # Debounce: tek bir hatalı lidar okuması recovery başlatmasın.
-        # Üçüncü koşul: önde duvar VAR ve ±70° içinde hiçbir açık yön YOK →
-        # dönerek çözüm bulunamaz, kaçışa geç (360° arama açık yarıyı bulur).
-        # Bu olmadan robot "yarısı boş duvar" önünde sıfır hata ile bakakalıyordu.
         no_open_direction = (
             front_dist <= eff_stop
             and self._best_open_clearance <= eff_stop
@@ -1188,7 +1216,13 @@ class SlamManagerNode(Node):
             self._trouble_count = min(self._trouble_count + 1, 4)
         else:
             self._trouble_count = max(self._trouble_count - 1, 0)
-        in_trouble = self._trouble_count >= 2
+
+        # Debounce reduced to 1 tick (100 ms): sector averaging already filters
+        # single-sample lidar noise. In fast-changing environments 200 ms is
+        # too slow — the robot is already much closer by the second tick.
+        # Emergency bypass: critically close obstacle skips debounce entirely.
+        critically_close = front_dist < self._direct_escape_distance * 0.45
+        in_trouble = critically_close or self._trouble_count >= 1
 
         # ── Strafe yönü (mecanum yan hareket) ────────────────────────────────
         # 50°–90° sektör açıklığı: robot gövdesinin yan duvar mesafesi.
@@ -1221,20 +1255,21 @@ class SlamManagerNode(Node):
             cycle_s = self._recovery_backup_time + self._recovery_rotate_time
             if elapsed > cycle_s:
                 if in_trouble:
-                    # Hâlâ sorun var — çevrimi yeniden başlat
                     self._start_recovery()
                     elapsed = 0.0
                 else:
-                    # Çevrim bitti, engel temizlendi — serbest sürüşe geç
                     self._reset_recovery()
                     should_recover = False
-            # Önü boşsa İLK oraya git: geri çekilme fazı bitti, sorun kalmadı ve
-            # ön gerçekten açıldıysa dönüş fazını atla — serbest sürüş düz çıksın.
+
+            # Sensor-driven early exit: don't wait for the full timer if the
+            # environment has already changed and a clear path is available.
+            # Minimum 0.25 s guarantees at least one physical backup movement.
             if (should_recover
-                    and elapsed >= self._recovery_backup_time
                     and not in_trouble
-                    and front_dist >= eff_stop * 1.2
-                    and abs(self._best_escape_angle) <= math.radians(20.0)):
+                    and elapsed >= 0.25
+                    and self._front_obstacle_distance >= eff_stop * 1.15
+                    and self._best_open_clearance >= eff_stop * 0.85
+                    and self._front_approach_vel < 0.05):  # obstacle not still closing
                 self._reset_recovery()
                 should_recover = False
 
@@ -1268,10 +1303,17 @@ class SlamManagerNode(Node):
                     throttle_duration_sec=1.0)
         else:
             # ── Serbest sürüş ─────────────────────────────────────────────────
-            # Kaçış fazını sıfırla — yön tekrar P-kontrolcüye bırakılır.
             self._reset_recovery()
 
-            self._smooth_angle = 0.70 * self._best_open_angle + 0.30 * self._smooth_angle
+            # Adaptive angle smoothing: track direction faster when obstacle is
+            # close. At eff_stop boundary: α≈0.55 (smooth). At eff_escape: α≈0.88
+            # (nearly instant). Approach velocity adds extra urgency.
+            dist_fraction = max(0.0, min(1.0,
+                (front_dist - eff_escape) / max(0.01, eff_stop - eff_escape)))
+            alpha_angle = 0.88 - 0.33 * dist_fraction  # 0.88 near wall → 0.55 far
+            alpha_angle = min(0.95, alpha_angle + 0.06 * approach_penalty)
+            self._smooth_angle = (alpha_angle * self._best_open_angle
+                                  + (1.0 - alpha_angle) * self._smooth_angle)
             error = self._smooth_angle
 
             if front_dist >= eff_stop:
@@ -1338,9 +1380,12 @@ def main(args=None) -> None:
     node = SlamManagerNode()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

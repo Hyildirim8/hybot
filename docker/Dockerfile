@@ -95,7 +95,9 @@ RUN apt-get update -qq && \
         ros-humble-navigation2 \
         ros-humble-nav2-bringup \
         ros-humble-nav2-rviz-plugins \
-        ros-humble-slam-toolbox && \
+        ros-humble-nav2-mppi-controller \
+        ros-humble-slam-toolbox \
+        ros-humble-rf2o-laser-odometry && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root operator user UID 1000.

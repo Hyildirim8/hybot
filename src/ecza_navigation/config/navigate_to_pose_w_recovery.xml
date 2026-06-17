@@ -1,13 +1,17 @@
 <?xml version="1.0"?>
 <!--
-  navigate_to_pose_w_recovery.xml — navigate_to_pose with costmap-clear recovery.
+  navigate_to_pose_w_recovery.xml — navigate_to_pose with costmap-clear + backup recovery.
 
-  Replaces navigate_to_pose_simple.xml. Difference: planner/controller failures
-  no longer abort the goal immediately. Each stage retries after clearing its
-  costmap, and the whole pipeline gets up to 6 outer retries with both costmaps
-  cleared in between. No physical recovery (Spin/BackUp) is used, so frontier
-  exploration via slam_manager keeps its "fail fast, blacklist, move on"
-  behaviour bounded by goal_timeout_s.
+  Recovery sequence on failure:
+    1. Clear local + global costmaps (removes stale obstacle markings)
+    2. BackUp 0.25 m at 0.12 m/s  (physically escapes wall contact when MPPI
+       optimizer fails because all sampled trajectories are in lethal zone)
+
+  BackUp is short (30 cm) at 25 cm/s — fast enough to escape wall contact in one recovery cycle.
+  slam_manager's 12-second goal timeout bounds how long a stuck recovery runs.
+
+  No Spin: frontier exploration needs "fail fast + blacklist" semantics, not
+  in-place rotation that consumes time without making progress.
 
   Plugins required (registered in nav2_params.yaml plugin_lib_names):
     nav2_rate_controller_bt_node
@@ -16,6 +20,7 @@
     nav2_clear_costmap_service_bt_node
     nav2_compute_path_to_pose_action_bt_node
     nav2_follow_path_action_bt_node
+    nav2_back_up_action_bt_node
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
@@ -39,6 +44,7 @@
                             service_name="local_costmap/clear_entirely_local_costmap"/>
         <ClearEntireCostmap name="ClearGlobalCostmap-Subtree"
                             service_name="global_costmap/clear_entirely_global_costmap"/>
+        <BackUp backup_dist="0.30" backup_speed="0.25" time_allowance="10"/>
       </Sequence>
     </RecoveryNode>
   </BehaviorTree>

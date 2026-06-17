@@ -44,6 +44,7 @@ import math
 import time
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from geometry_msgs.msg import PoseStamped, Twist
@@ -182,9 +183,14 @@ class TeleopNode(Node):
         self._cmd_pub = self.create_publisher(
             Twist, "/controller_manager/reference_unstamped", best_effort_qos
         )
-        # Keep the standard ROS velocity topic populated for diagnostics, bags,
-        # and host tools while still feeding the ros2_control controller topic.
-        self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", best_effort_qos)
+        # /cmd_vel uses RELIABLE so Isaac Sim's default-QoS subscriber receives it.
+        # (BEST_EFFORT publisher + RELIABLE subscriber = QoS incompatibility → no delivery)
+        reliable_cmd_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._cmd_vel_pub = self.create_publisher(Twist, "/cmd_vel", reliable_cmd_qos)
 
         # Latched publisher so new subscribers always get the current mode.
         latched_qos = QoSProfile(
@@ -635,7 +641,7 @@ def main(args=None) -> None:
     node = TeleopNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

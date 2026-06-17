@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  fastdds_sim.xml — FastDDS config for Isaac Sim simulation mode.
+
+  Same UDPv4 transport as fastdds_udp.xml (no SHM inside Docker), but adds
+  Isaac Sim machine as a unicast initial peer so DDS PDP discovery works even
+  when multicast is blocked (WiFi AP isolation, different subnets, etc.).
+
+  Used by all containers when running with docker-compose.sim.yaml overlay.
+  Set ISAACSIM_IP=<ip> in .env to change the peer address.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>udp_transport</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="participant_profile" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>udp_transport</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+      <builtin>
+        <initialPeersList>
+          <!-- Isaac Sim machine — unicast for cross-subnet / WiFi isolation -->
+          <locator>
+            <udpv4>
+              <address>10.42.101.217</address>
+            </udpv4>
+          </locator>
+          <!-- Local multicast — re-adds the FastDDS default so RPi containers
+               using this profile (joy, teleop, slam_manager) can still
+               discover each other on the same host. Without this entry the
+               custom list replaces the default, breaking joy→teleop DDS. -->
+          <locator>
+            <udpv4>
+              <address>239.255.0.1</address>
+              <port>7400</port>
+            </udpv4>
+          </locator>
+        </initialPeersList>
+      </builtin>
+    </rtps>
+  </participant>
+</profiles>

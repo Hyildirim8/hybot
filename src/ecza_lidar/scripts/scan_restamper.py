@@ -55,15 +55,21 @@ class ScanRestamper(Node):
         self._last_slam_publish_ns = 0
         self._angular_z = 0.0
 
-        qos = QoSProfile(
+        sensor_qos = QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
-        self._pub = self.create_publisher(LaserScan, output_topic, qos)
-        self._slam_pub = self.create_publisher(LaserScan, slam_output_topic, qos)
-        self.create_subscription(LaserScan, input_topic, self._scan_cb, qos)
-        self.create_subscription(Odometry, odom_topic, self._odom_cb, qos)
+        # Nav2 costmap subscribes with RELIABLE; publish RELIABLE so data flows.
+        pub_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._pub = self.create_publisher(LaserScan, output_topic, pub_qos)
+        self._slam_pub = self.create_publisher(LaserScan, slam_output_topic, pub_qos)
+        self.create_subscription(LaserScan, input_topic, self._scan_cb, sensor_qos)
+        self.create_subscription(Odometry, odom_topic, self._odom_cb, sensor_qos)
         self.get_logger().info(
             f"scan_restamper {input_topic} -> {output_topic} "
             f"max_publish_hz={max_publish_hz:.2f} angle_downsample={self._angle_downsample}; "
@@ -134,9 +140,12 @@ class ScanRestamper(Node):
 def main(args=None) -> None:
     rclpy.init(args=args)
     node = ScanRestamper()
+    from rclpy.executors import SingleThreadedExecutor
+    executor = SingleThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
+        executor.spin()
+    except (KeyboardInterrupt, rclpy.executors.ExternalShutdownException):
         pass
     finally:
         node.destroy_node()

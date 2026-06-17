@@ -219,6 +219,40 @@ services:
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
       /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
 
+  # ── rf2o_lidar ────────────────────────────────────────────────────────────
+  # Laser-scan-based odometry (rf2o). Publishes odom→base_link TF + /odom_rf2o.
+  # Replaces mecanum_drive_controller's wheel-encoder TF as the motion prior for
+  # slam_toolbox (laser odom is slip-immune — no mecanum roller drift on /scan).
+  # controllers.yaml sets enable_odom_tf: false so mecanum still publishes /odom
+  # (velocity feedback for MPPI) but stops publishing the TF that rf2o now owns.
+  rf2o_lidar:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+    command:
+      - ros2
+      - run
+      - rf2o_laser_odometry
+      - rf2o_laser_odometry_node
+      - --ros-args
+      - -p
+      - laser_scan_topic:=/scan
+      - -p
+      - odom_topic:=/odom_rf2o
+      - -p
+      - publish_tf:=true
+      - -p
+      - base_frame_id:=base_link
+      - -p
+      - odom_frame_id:=odom
+      - -p
+      - freq:=10.0
+    depends_on:
+      - lidar
+      - robot_description
+
   # ── slam_manager ──────────────────────────────────────────────────────────
   # SLAM haritalama yöneticisi ve otonom frontier keşfi.
   # Joystick tuşları:
