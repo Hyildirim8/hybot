@@ -60,10 +60,13 @@ class ScanRestamper(Node):
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
-        # Nav2 costmap subscribes with RELIABLE; publish RELIABLE so data flows.
+        # All /scan subscribers (Nav2 costmaps, rf2o, slam_manager) use BEST_EFFORT.
+        # Publishing RELIABLE with fastdds_udp.xml (SHM disabled, UDPv4 only) can
+        # prevent BEST_EFFORT subscribers from receiving data due to a FastDDS
+        # GUID-matching edge case — match BEST_EFFORT to guarantee delivery.
         pub_qos = QoSProfile(
             depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
         self._pub = self.create_publisher(LaserScan, output_topic, pub_qos)
@@ -88,7 +91,7 @@ class ScanRestamper(Node):
             lo = max(0.0, msg.range_min)
             valid = sum(
                 1 for d in msg.ranges
-                if math.isfinite(d) and lo <= d <= msg.range_max
+                if math.isfinite(d) and lo <= d < msg.range_max
             )
             if valid < len(msg.ranges) * self._min_valid_fraction:
                 self._dropped_scans += 1
@@ -126,6 +129,17 @@ class ScanRestamper(Node):
         out.header.stamp = now.to_msg()
         if self._frame_id:
             out.header.frame_id = self._frame_id
+        # Convert range_max sentinel to inf (ROS REP-117 convention).
+        # Isaac Sim returns exactly range_max for no-hit rays; real lidars use inf/nan.
+        # rf2o, Nav2 costmaps, and SLAM all expect inf for "no return" — leaving
+        # range_max values in makes rf2o treat them as real obstacles at 12 m, which
+        # produces a near-singular range-flow matrix → Eigensolver failures.
+        if out.range_max > 0:
+            rmax = out.range_max
+            out.ranges = [
+                float('inf') if (not math.isfinite(r) or r >= rmax - 0.01) else r
+                for r in out.ranges
+            ]
         if downsample > 1:
             ranges = list(out.ranges[::downsample])
             intensities = list(out.intensities[::downsample]) if out.intensities else []

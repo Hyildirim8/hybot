@@ -126,6 +126,16 @@ services:
         params = {'robot_state_publisher': {'ros__parameters': {'robot_description': urdf, 'use_tf_static': True}}}
         yaml.dump(params, open('/tmp/rsp_params.yaml', 'w'))
         "
+        # odom→world: bridges Isaac Sim's world frame into the nav coordinate system.
+        # Isaac Sim publishes world→base_footprint at wall-clock time (~38 Hz) as ground-
+        # truth robot pose; this static transform makes that reachable from odom/map.
+        # rf2o is NOT used in sim (it would publish odom→base_footprint, conflicting with
+        # Isaac Sim's world→base_footprint and causing base_footprint to alternate parents
+        # between odom and world at 46 Hz → intermittent TF failures and sensor/costmap
+        # position mismatch). Isaac Sim's physics provides ground-truth — no rf2o needed.
+        ros2 run tf2_ros static_transform_publisher \
+          --x 0 --y 0 --z 0 --qx 0 --qy 0 --qz 0 --qw 1 \
+          --frame-id odom --child-frame-id world &
         python3 /config/tf_restamper_sim.py &
         python3 /config/joint_state_zero.py &
         exec ros2 run robot_state_publisher robot_state_publisher \
@@ -159,16 +169,18 @@ services:
           -p slam_publish_hz:=5.0 \
           -p slam_angle_downsample:=2 \
           -p max_slam_angular_z:=0.65 \
-          -p odom_topic:=/odom \
+          -p odom_topic:=/odom_rf2o \
           -p min_valid_fraction:=0.05
     depends_on:
       - robot_description
 
   # ── rf2o_lidar ────────────────────────────────────────────────────────────
-  # Laser-scan odometry for sim. Publishes odom→base_footprint TF + /odom_rf2o.
-  # Replaces Isaac Sim's world→base_footprint pose (which is now NOT re-stamped by
-  # tf_restamper_sim.py). TF chain: odom→base_footprint→base_link→laser_frame.
-  # base_frame_id is base_footprint (sim URDF root) — different from real robot's base_link.
+  # Laser-scan odometry for sim. publish_tf:=false so it does NOT publish
+  # odom→base_footprint — Isaac Sim's world→base_footprint (via odom→world bridge)
+  # is the authoritative robot pose in sim. If rf2o also published odom→base_footprint,
+  # base_footprint's parent would alternate between odom (8 Hz) and world (38 Hz),
+  # breaking the TF chain for navigation. /odom_rf2o odometry topic is still published
+  # and available for inspection or future use.
   rf2o_lidar:
     <<: *ros-service
     environment:
@@ -182,18 +194,20 @@ services:
       - rf2o_laser_odometry
       - rf2o_laser_odometry_node
       - --ros-args
+      - --log-level
+      - error
       - -p
       - laser_scan_topic:=/scan
       - -p
       - odom_topic:=/odom_rf2o
       - -p
-      - publish_tf:=true
+      - publish_tf:=false
       - -p
       - base_frame_id:=base_footprint
       - -p
       - odom_frame_id:=odom
       - -p
-      - freq:=10.0
+      - freq:=8.0
     depends_on:
       - lidar
       - robot_description

@@ -229,6 +229,12 @@ services:
     <<: *ros-service
     profiles:
       - nav
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      # fastdds_udp.xml: same profile as robot_description and lidar so
+      # RELIABLE/TRANSIENT_LOCAL TF exchange works (same custom UDPv4 port formulas).
+      # No Isaac Sim in the real-robot setup → no initialPeersList needed.
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
     command:

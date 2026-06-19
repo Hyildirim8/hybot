@@ -126,9 +126,9 @@ controller_server:
     # motion_model: "Omni" enables vy sampling for mecanum holonomic motion.
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 28
+      time_steps: 24
       model_dt: 0.17          # must be >= 1/controller_frequency (1/6 ≈ 0.167)
-      batch_size: 1500
+      batch_size: 1000
       vx_std: 0.45             # wider sampling → more high-speed / escape trajectories explored
       vy_std: 0.35             # wider lateral sampling → better tight-corridor threading
       wz_std: 0.4

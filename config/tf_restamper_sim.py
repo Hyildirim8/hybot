@@ -30,10 +30,8 @@ SIM_TIME_THRESHOLD = 100_000_000
 
 # Re-stamp transforms whose *parent* frame is owned by Isaac Sim.
 # 'base_footprint' = wheel joint dynamics (re-stamped so RViz shows spinning wheels).
-# 'world' is intentionally excluded: rf2o_laser_odometry publishes odom→base_footprint
-# directly (scan-matched, slip-immune), replacing Isaac Sim's world→base_footprint pose.
-# The static odom→world bridge is also removed from robot_description for the same reason.
-ISAAC_SIM_PARENT_FRAMES = {'base_footprint'}
+# 'world' = ground-truth robot pose (world→base_footprint) published by Isaac Sim.
+ISAAC_SIM_PARENT_FRAMES = {'base_footprint', 'world'}
 
 
 class TFRestamper(Node):
@@ -64,6 +62,7 @@ class TFRestamper(Node):
                 stamp_sec < SIM_TIME_THRESHOLD
                 and t.header.frame_id in ISAAC_SIM_PARENT_FRAMES
             ):
+                self.get_logger().info(f"Restamping {t.header.frame_id}->{t.child_frame_id}: sim_time={stamp_sec}.{t.header.stamp.nanosec:09d} -> wall_time={now.sec}.{now.nanosec:09d}", throttle_duration_sec=1.0)
                 t.header.stamp = now
                 restamped.append(t)
 

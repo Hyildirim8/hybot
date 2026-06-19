@@ -47,7 +47,7 @@
     btn_strafe_left: 6             # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
     btn_strafe_right: 7            # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
     strafe_invert: true            # manuel strafe: sağ komut gerçek sağ/RViz sağ ile eşleşsin
-    auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
+    auto_strafe_invert: false      # Nav2/slam_manager uses ROS convention (+y=left); mecanum_drive_controller also uses vy>0=left — no flip needed.
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
     btn_auto_mode_alt: -1          # no alternate toggle
     btn_auto_mode_candidates: [9]  # only Start toggles TELEOP <-> AUTO

@@ -1,23 +1,55 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!--
-  fastdds_udp.xml
-  Disables SHM transport, keeps builtin UDP transports for proper PDP discovery.
-  Used by all ROS2 containers (network_mode: host).
+  fastdds_udp.xml — SHM-disabled UDPv4 profile
+  ============================================================
+  Used by containers that must NOT actively peer with Isaac Sim
+  (robot_description, lidar, navigation, rviz).
+
+  Why not fastdds_sim.xml here:
+    Isaac Sim (10.42.101.217) exposes ~20 DDS participants. Any container in
+    its initialPeersList gets flooded with EDP announcements for all of them,
+    throttling ROS callbacks to ~12%.  fastdds_sim.xml is reserved for
+    containers that actively bridge to Isaac Sim (joy, teleop, slam_manager)
+    and for rf2o_lidar (which needs to receive /tf_static RELIABLE/TRANSIENT_LOCAL
+    from robot_description — see docker-compose.sim.yaml rf2o_lidar comment).
+
+  What this profile does:
+    useBuiltinTransports: false — excludes the SHM transport and the builtin UDP
+    userTransports: [udpv4]     — adds a plain custom UDPv4 as the only transport
+
+  Why custom UDPv4 instead of builtin UDP:
+    The builtin UDPv4 and the SHM transport are registered as a pair when
+    useBuiltinTransports is true.  There is no FastDDS XML knob to keep
+    builtin UDP while removing only SHM (FASTDDS_BUILTIN_TRANSPORTS=UDPv4 env
+    var exists in FastDDS ≥2.9 but is not available on all Pi builds).
+    A custom UDPv4 transport (type:UDPv4, no extra fields) reproduces the
+    builtin UDP port-formula behaviour — PDP/EDP/data ports are identical —
+    so same-profile containers communicate correctly.
+
+  Cross-profile communication (this profile ↔ fastdds_sim.xml):
+    Both profiles use the same custom UDPv4 type with the same port formulas.
+    fastdds_sim.xml containers (teleop, etc.) do communicate with fastdds_udp.xml
+    containers (navigation, etc.) for RELIABLE topics such as /cmd_vel_nav. Any
+    container that must exchange RELIABLE/TRANSIENT_LOCAL topics (e.g. /tf_static)
+    with these containers must use either this profile or fastdds_sim.xml.
+    A default-DDS (empty profile, SHM+builtin-UDP) container may receive
+    BEST_EFFORT topics from here but RELIABLE/TRANSIENT_LOCAL exchange fails due
+    to mismatched unicast port locators.
 -->
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
   <transport_descriptors>
     <transport_descriptor>
-      <transport_id>shm_disabled</transport_id>
+      <transport_id>udpv4</transport_id>
       <type>UDPv4</type>
     </transport_descriptor>
   </transport_descriptors>
 
   <participant profile_name="participant_profile" is_default_profile="true">
     <rtps>
-      <userTransports>
-        <transport_id>shm_disabled</transport_id>
-      </userTransports>
       <useBuiltinTransports>false</useBuiltinTransports>
+      <userTransports>
+        <transport_id>udpv4</transport_id>
+      </userTransports>
     </rtps>
   </participant>
 </profiles>

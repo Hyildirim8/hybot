@@ -21,6 +21,21 @@ WORKDIR /ws
 # src/ may be empty during initial scaffold; a placeholder keeps the COPY valid.
 COPY src/ src/
 
+# rf2o_laser_odometry is not in the humble apt repo for arm64 — clone from source.
+# Pinned to a known-good commit for reproducible builds.
+RUN apt-get update -qq && \
+    apt-get install -y --no-install-recommends git && \
+    git clone --depth 1 https://github.com/MAPIRlab/rf2o_laser_odometry.git \
+        src/rf2o_laser_odometry && \
+    rm -rf /var/lib/apt/lists/* && \
+    # Default init_pose_from_topic is "/base_pose_ground_truth", which makes rf2o
+    # wait for a ground-truth odometry message before processing any scan — it never
+    # arrives in our setup. Patch the default to "" so GT_pose_initialized=true from
+    # the start, matching the behaviour of -p init_pose_from_topic:="" at runtime
+    # (rcl rejects empty-value params, so compile-time patch is the only clean way).
+    sed -i 's|declare_parameter<std::string>("init_pose_from_topic", "/base_pose_ground_truth")|declare_parameter<std::string>("init_pose_from_topic", "")|' \
+        src/rf2o_laser_odometry/src/CLaserOdometry2DNode.cpp
+
 RUN apt-get update -qq && \
     rosdep update --rosdistro humble && \
     rosdep install \
@@ -28,7 +43,7 @@ RUN apt-get update -qq && \
         --ignore-src \
         --rosdistro humble \
         -y \
-        --skip-keys "micro_ros_agent ament_python" && \
+        --skip-keys "micro_ros_agent ament_python cmake_modules" && \
     rm -rf /var/lib/apt/lists/*
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -96,8 +111,7 @@ RUN apt-get update -qq && \
         ros-humble-nav2-bringup \
         ros-humble-nav2-rviz-plugins \
         ros-humble-nav2-mppi-controller \
-        ros-humble-slam-toolbox \
-        ros-humble-rf2o-laser-odometry && \
+        ros-humble-slam-toolbox && \
     rm -rf /var/lib/apt/lists/*
 
 # Create non-root operator user UID 1000.
