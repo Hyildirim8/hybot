@@ -60,7 +60,7 @@ mecanum_drive_controller:
     # ── Odometry ──────────────────────────────────────────────────────────────
     odom_frame_id: odom
     base_frame_id: base_link
-    enable_odom_tf: false     # rf2o_laser_odometry publishes odom→base_link TF (slip-immune)
+    enable_odom_tf: false     # robot_localization EKF (encoder+IMU) publishes odom→base_link TF
     open_loop: false           # false = use wheel feedback for odometry/synchronization
 
     # ── cmd_vel input ─────────────────────────────────────────────────────────

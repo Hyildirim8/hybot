@@ -338,6 +338,14 @@ class SlamManagerNode(Node):
             self._publish_zero()
 
     def _scan_cb(self, msg: LaserScan) -> None:
+        # All consumers of the sector-clearance values computed below
+        # (_explore_tick, _direct_explore_tick) are themselves gated on
+        # self._exploring — skip the expensive per-ray trig loop entirely
+        # when idle/teleop-only. This was costing ~28% CPU unconditionally
+        # on every /scan message regardless of whether it was ever used.
+        if not self._exploring:
+            return
+
         front = math.inf
         left = math.inf
         right = math.inf

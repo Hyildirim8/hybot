@@ -24,6 +24,14 @@ x-ros-service: &ros-service
     dockerfile: docker/Dockerfile
     target: runtime
   network_mode: host
+  # ipc: host — shares /dev/shm across containers (network_mode:host alone
+  # does NOT do this; IPC is a separate namespace). This was added to make
+  # FastDDS SHM transport work cross-container, but SHM proved unreliable
+  # in practice here (RELIABLE topics like /joy intermittently stopped
+  # flowing between containers even with matched discovery) — so
+  # fastdds_udp.xml (SHM disabled) is back in use. Kept ipc:host anyway
+  # since it's harmless and useful if SHM is revisited later.
+  ipc: host
   user: rosuser
   restart: unless-stopped
   environment:
@@ -102,6 +110,7 @@ services:
   micro-ros-agent:
     image: microros/micro-ros-agent:humble
     network_mode: host
+    ipc: host
     privileged: true
     restart: unless-stopped
     environment:
@@ -111,7 +120,7 @@ services:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - /dev:/dev
     command: >
-      serial --dev ${SERIAL_DEV:-/dev/ttyACM0} --baudrate 115200 --verbose 6
+      serial --dev ${SERIAL_DEV:-/dev/ttyACM0} --baudrate 115200 --verbose ${VERBOSE:-1}
     healthcheck:
       test: ["CMD-SHELL", "test -e ${SERIAL_DEV:-/dev/ttyACM0}"]
       interval: 10s
@@ -144,9 +153,17 @@ services:
   #   bash scripts/launch.sh --rviz
   #   bash scripts/rviz.sh --docker          (standalone, no other services)
   #
-  # Display: Wayland-native via the host's /run/user/1000/wayland-0 socket.
-  # The socket path is hardcoded for UID 1000 (the 'master' user on this RPi).
-  # XWayland (:0) is also mounted as a fallback.
+  # Display: self-contained Xvfb virtual X server (NOT the host's
+  # XWayland/labwc session). rviz2 reliably SIGSEGVs ("libGL error: failed
+  # to create drawable" in Ogre's GLXWindow::create) when connected to the
+  # host's rootless XWayland — root-caused to XWayland/labwc's own DRI3
+  # buffer-sharing negotiation, confirmed by ruling out every client-side
+  # variable (shader bugs, GL version, DRI2/3, software vs real GPU
+  # rendering, GPU permissions, kcmp() capability, respawn timing — all
+  # tested, none fixed it while connected to XWayland). Xvfb needs no
+  # external compositor at all, avoiding that code path entirely. View it
+  # via VNC on port 5901 (x11vnc, no password — LAN-only, do not expose
+  # this port to the internet).
   #
   # The command waits 8 s before launching so robot_state_publisher has time
   # to advertise /robot_description before RViz tries to subscribe to it.
@@ -154,44 +171,151 @@ services:
     <<: *ros-service
     profiles:
       - rviz
-    # Run as the host login user (UID 1000) so the Wayland socket is accessible.
-    user: "1000:1000"
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
-      # Display: use XWayland (xcb) via DISPLAY=:0 — more reliable inside
-      # Docker on RPi/labwc than the wayland socket. Wayland socket is still
-      # mounted so qtwayland5 can be used if xcb is unavailable.
-      DISPLAY: ":0"
-      XAUTHORITY: /tmp/.host_Xauthority
-      QT_QPA_PLATFORM: xcb
+      DISPLAY: ":99"
       LIBGL_ALWAYS_SOFTWARE: "1"
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
-      WAYLAND_DISPLAY: wayland-0
-      XDG_RUNTIME_DIR: /run/user/1000
     volumes:
-      # Wayland runtime dir — contains wayland-0 socket
-      - /run/user/1000:/run/user/1000:rw
-      # XWayland socket — fallback
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - /home/master/.Xauthority:/tmp/.host_Xauthority:ro
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
+      # Patched: the stock indexed_8bit_image.material's custom GLSL
+      # (sampler2D + sampler1D in one program) reliably SIGSEGVs rviz2
+      # under llvmpipe software rendering. See the file for details.
+      - ./config/rviz_material_patch/indexed_8bit_image.material:/opt/ros/humble/share/rviz_rendering/ogre_media/materials/scripts/indexed_8bit_image.material:ro
     command:
       - bash
       - -c
       - |
-        # Wait for robot_state_publisher to be ready before RViz subscribes.
-        # robot_description service takes ~5 s to start controllers on RPi.
-        # Qt requires 0700 on XDG_RUNTIME_DIR; host labwc creates it 0770.
-        chmod 0700 /run/user/1000 2>/dev/null || true
+        # restart:unless-stopped restarts THIS container's process, not a
+        # fresh filesystem — stale lock files from a crashed Xvfb survive
+        # into the next attempt and block it from starting at all
+        # ("Server is already active for display 99"). Clean up first.
+        rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+        echo "[rviz] starting Xvfb on :99..."
+        Xvfb :99 -screen 0 1280x800x24 +extension GLX +render -nolisten tcp &
+        XVFB_PID=$!
+        sleep 2
+        echo "[rviz] starting x11vnc on port 5901 (no auth — LAN-only)..."
+        # -auth /dev/null: Xvfb was started with no -auth cookie file (no
+        # access control needed for a container-local display), but x11vnc
+        # otherwise tries to auto-locate one and errors out when it can't.
+        x11vnc -display :99 -auth /dev/null -nopw -forever -shared -rfbport 5901 -bg -o /tmp/x11vnc.log -quiet
         echo "[rviz] waiting 8 s for robot_state_publisher..."
         sleep 8
-        exec ros2 launch ecza_description display.launch.py \
-          gui:=false \
-          rvizconfig:=/config/rover.rviz
-    restart: "no"
+        # exec rviz2 directly (not via `ros2 launch display.launch.py`):
+        #   1. display.launch.py also starts its own robot_state_publisher,
+        #      duplicating the one already running in robot_description —
+        #      wasted CPU + redundant TF publishing.
+        #   2. ros2 launch does not propagate a crashed rviz2's exit to its
+        #      own exit code, so Docker never saw the crash to restart on.
+        #      exec'ing it directly as PID 1 means a crash kills the
+        #      container, so restart:unless-stopped recovers it.
+        exec ros2 run rviz2 rviz2 -d /config/rover.rviz --ros-args -p use_sim_time:=false
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── imu ───────────────────────────────────────────────────────────────────
+  # GY-85 9-DOF IMU module on I2C bus 1 (RPi5 GPIO2=SDA, GPIO3=SCL).
+  # Publishes /imu/data_raw (sensor_msgs/Imu) and /imu/mag (MagneticField).
+  # Requires I2C enabled on the RPi: sudo raspi-config → Interface → I2C → On
+  # Verify sensor addresses: sudo i2cdetect -y 1  (expect: 1e, 53, 69)
+  imu:
+    <<: *ros-service
+    user: root                               # /dev/i2c-1 requires root or i2c group
+    privileged: true
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_imu/ecza_imu/imu_node.py:/imu_node.py:ro
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    command:
+      - bash
+      - -c
+      - |
+        ros2 run tf2_ros static_transform_publisher \
+          --ros-args -r __node:=imu_tf_pub \
+          -- 0.0 0.0 0.05 0.0 0.0 0.0 base_link imu_link &
+        exec python3 /imu_node.py \
+          --ros-args \
+          -p i2c_bus:=1 \
+          -p frame_id:=imu_link \
+          -p rate_hz:=50.0
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── camera ───────────────────────────────────────────────────────────────
+  # ESP32-CAM (AI Thinker), Raw Binary Serial protocol over the RPi5's own
+  # UART (ttyAMA0) at 4,000,000 baud — the "Recommended for Navigation"
+  # method from ESP32-CAM-RealTime-Vision-Benchmark (115.8ms latency, 7.5ms
+  # jitter, <1us CPU encode — far more stable than the project's WiFi/HTTP
+  # variant, which had 55.6ms jitter with spikes to 1.5s).
+  # Requires the uart-clk-100m dtoverlay for clean 4M baud (already applied
+  # — see /boot/firmware/config.txt) and firmware/binary.cpp flashed to the
+  # ESP32-CAM (default platformio.ini env, upload_port=/dev/ttyAMA0).
+  # Publishes /camera/image_raw/compressed (sensor_msgs/CompressedImage).
+  camera:
+    <<: *ros-service
+    user: root                               # /dev/ttyAMA0 requires root or dialout group
+    privileged: true
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_camera/ecza_camera/esp32cam_node.py:/esp32cam_node.py:ro
+    devices:
+      - /dev/ttyAMA0:/dev/ttyAMA0
+    command:
+      - bash
+      - -c
+      - |
+        ros2 run tf2_ros static_transform_publisher \
+          --ros-args -r __node:=camera_tf_pub \
+          -- 0.15 0.0 0.10 0.0 0.0 0.0 base_link camera_link &
+        exec python3 /esp32cam_node.py \
+          --ros-args \
+          -p serial_port:=/dev/ttyAMA0 \
+          -p baud_rate:=4000000 \
+          -p frame_id:=camera_link \
+          -p publish_raw:=false
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── csi_camera ───────────────────────────────────────────────────────────
+  # RPi Camera Module 2 (imx219) on the CAM0/CSI port. Capture itself runs on
+  # the HOST (scripts/csi_cam_stream.sh + ecza-robotu-csi-cam.service) — the
+  # imx219's PiSP ISP pipeline needs this host's own libcamera build, which
+  # has no matching package inside the container's Ubuntu 22.04 apt repos.
+  # This container just runs the ROS-side TCP client (network_mode: host
+  # reaches the host streamer at 127.0.0.1) and republishes frames as
+  # sensor_msgs/CompressedImage, same pattern as the esp32cam `camera` service.
+  # Publishes /camera_csi/image_raw/compressed.
+  # View at http://<rpi-ip>:8081/ or rqt_image_view — deliberately NOT added
+  # as an rviz Image display (segfaults rviz2 under this container's
+  # Xvfb+llvmpipe setup even when disabled; see rover.rviz's Map display
+  # comment).
+  csi_camera:
+    <<: *ros-service
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_camera/ecza_camera/rpicam_node.py:/rpicam_node.py:ro
+    command:
+      - bash
+      - -c
+      - |
+        ros2 run tf2_ros static_transform_publisher \
+          --ros-args -r __node:=csi_camera_tf_pub \
+          -- 0.15 0.0 0.15 0.0 0.0 0.0 base_link csi_camera_link &
+        exec python3 /rpicam_node.py \
+          --ros-args \
+          -p host:=127.0.0.1 \
+          -p port:=${CSI_CAM_PORT:-8090} \
+          -p frame_id:=csi_camera_link \
+          -p http_port:=8081
+    restart: unless-stopped
     depends_on:
       - robot_description
 
@@ -217,47 +341,40 @@ services:
     command: >
       bash -c "ros2 bag record
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
-      /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
+      /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /odometry/filtered /imu/data_raw /imu/mag /joint_states /diagnostics /scan /map /autonomous_mode"
 
-  # ── rf2o_lidar ────────────────────────────────────────────────────────────
-  # Laser-scan-based odometry (rf2o). Publishes odom→base_link TF + /odom_rf2o.
-  # Replaces mecanum_drive_controller's wheel-encoder TF as the motion prior for
-  # slam_toolbox (laser odom is slip-immune — no mecanum roller drift on /scan).
-  # controllers.yaml sets enable_odom_tf: false so mecanum still publishes /odom
-  # (velocity feedback for MPPI) but stops publishing the TF that rf2o now owns.
-  rf2o_lidar:
+  # ── ekf ───────────────────────────────────────────────────────────────────
+  # Extended Kalman Filter — fuses wheel-encoder odometry + GY-85 gyro.
+  # Replaces rf2o_lidar as the sole publisher of odom→base_link TF.
+  #
+  # Sources:
+  #   /odom          mecanum_drive_controller (50 Hz) — x, y, yaw, vx, vy, vyaw
+  #   /imu/data_raw  GY-85 ITG3205 gyro      (50 Hz) — angular velocity z (yaw rate)
+  #
+  # Publishes:
+  #   /odometry/filtered  nav_msgs/Odometry
+  #   odom → base_link    tf2  (slam_toolbox & Nav2 use this)
+  #
+  # controllers.yaml keeps enable_odom_tf: false — EKF is the sole TF owner.
+  ekf:
     <<: *ros-service
     profiles:
       - nav
-    environment:
-      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
-      # fastdds_udp.xml: same profile as robot_description and lidar so
-      # RELIABLE/TRANSIENT_LOCAL TF exchange works (same custom UDPv4 port formulas).
-      # No Isaac Sim in the real-robot setup → no initialPeersList needed.
-      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/ekf.yaml:/config/ekf.yaml:ro
     command:
       - ros2
       - run
-      - rf2o_laser_odometry
-      - rf2o_laser_odometry_node
+      - robot_localization
+      - ekf_node
       - --ros-args
-      - -p
-      - laser_scan_topic:=/scan
-      - -p
-      - odom_topic:=/odom_rf2o
-      - -p
-      - publish_tf:=true
-      - -p
-      - base_frame_id:=base_link
-      - -p
-      - odom_frame_id:=odom
-      - -p
-      - freq:=10.0
+      - --params-file
+      - /config/ekf.yaml
+    restart: unless-stopped
     depends_on:
-      - lidar
       - robot_description
+      - imu
 
   # ── slam_manager ──────────────────────────────────────────────────────────
   # SLAM haritalama yöneticisi ve otonom frontier keşfi.
@@ -301,8 +418,17 @@ services:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./src/ecza_lidar/launch/lidar.launch.py:/ws/install/share/ecza_lidar/launch/lidar.launch.py:ro
       - ./src/ecza_lidar/scripts/scan_restamper.py:/ws/install/lib/ecza_lidar/scan_restamper.py:ro
-    command: >
-      ros2 launch ecza_lidar lidar.launch.py
+    command:
+      - bash
+      - -c
+      - |
+        # rplidar_composition SIGABRTs ("buffer overflow detected") if it opens
+        # a serial_port that doesn't exist yet — wait for the udev symlink first
+        # so a USB replug / late boot doesn't trigger the docker restart crash-loop.
+        echo "[lidar] waiting for /dev/ttyLIDAR..."
+        while [ ! -e /dev/ttyLIDAR ]; do sleep 1; done
+        echo "[lidar] device found, starting driver"
+        exec ros2 launch ecza_lidar lidar.launch.py
     restart: unless-stopped
     depends_on:
       - robot_description
@@ -357,6 +483,7 @@ services:
     depends_on:
       - robot_description
       - lidar
+      - ekf
 
 # ---------------------------------------------------------------------------
 # Named volumes (none — bags use bind-mount for host accessibility)

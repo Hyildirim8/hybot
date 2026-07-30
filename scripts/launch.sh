@@ -181,7 +181,7 @@ echo "Starting ecza-robotu rover stack..."
 #   • NAV_MODE / MAP env var changes take effect
 #   • The 10s startup delay in the container command resets cleanly
 if [[ -n "$PROFILES" ]]; then
-    exec docker compose $COMPOSE_FILES up --force-recreate "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+    exec docker compose $COMPOSE_FILES up --force-recreate --remove-orphans "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 else
-    exec docker compose $COMPOSE_FILES up "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
+    exec docker compose $COMPOSE_FILES up --remove-orphans "${REMAINING_ARGS[@]+"${REMAINING_ARGS[@]}"}"
 fi

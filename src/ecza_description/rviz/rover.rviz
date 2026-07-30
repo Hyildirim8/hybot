@@ -181,6 +181,13 @@ Visualization Manager:
       Value: true
 
     # ── SLAM map ────────────────────────────────────────────────────────
+    # NOTE: do NOT add an rviz_default_plugins/Image (or Camera) display to
+    # this file. Image creates its own dock with a second GL render window
+    # even when Enabled: false, and that extra GLX window reliably SIGSEGVs
+    # rviz2 under Xvfb+llvmpipe ("failed to create drawable" → crash ~3s
+    # after startup, every launch). Removing the Image display block fixed
+    # a persistent crash-restart loop; view /camera/image_raw with
+    # rqt_image_view from another machine instead.
     - Class: rviz_default_plugins/Map
       Alpha: 0.7
       Color Scheme: map

@@ -1,0 +1,25 @@
+// Patched: the upstream custom GLSL (sampler2D + sampler1D in one program)
+// reliably SIGSEGVs under llvmpipe software rendering ("active samplers
+// with a different type refer to the same texture image unit" — a genuine
+// Mesa/llvmpipe linker bug, not a resource issue; confirmed reproducible
+// even with GL context forced to a matching GLSL 1.20 profile).
+// Ogre compiles every material in its resource path at startup regardless
+// of which rviz displays are enabled, so this crashes even with
+// Map/GlobalCostmap/LocalCostmap all disabled in the .rviz config.
+// Dropping the custom vertex/fragment program entirely falls back to
+// Ogre's default fixed-function-style texturing — Map/costmap displays
+// will render as a plain (uncolored) grayscale texture instead of the
+// intended color-mapped palette, but rviz2 no longer crashes.
+material rviz/Indexed8BitImage
+{
+  technique
+  {
+    pass
+    {
+      texture_unit
+      {
+        texture no_image.png 2d
+      }
+    }
+  }
+}
