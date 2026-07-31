@@ -44,7 +44,9 @@
     # kararsız dönüş hareketiydi (aşağıdaki max_angular_speed'e bakın) — false
     # bunu düzeltmedi. f76063e'deki (kullanıcının "düzgündü" dediği commit)
     # bilinen-iyi değere geri alındı.
-    angular_invert: true           # TELEOP: sağa itince saat yönünde dönmüyorsa true
+    # 2026-07-31: tam kontrol taramasında sağ/sol dönüş yönü ters ölçüldü
+    # (sağ = CCW, sol = CW) — kullanıcı isteğiyle false yapıldı, sağ artık CW.
+    angular_invert: false          # TELEOP: sağa itince saat yönünde dönmüyorsa true
     enable_button: 5               # RB — dead-man switch
     enable_button_alt: 4           # LB — alternate dead-man for mode compatibility
     require_enable_button: false   # manuel modda RB/LB basmadan sürüş aktif
