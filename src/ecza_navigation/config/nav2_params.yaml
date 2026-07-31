@@ -190,8 +190,12 @@ local_costmap:
       robot_base_frame: base_link
       transform_tolerance: 3.0
       rolling_window: true
-      width: 4
-      height: 4
+      # 4 -> 12 m: 4x4'lük pencere robottan 2 m ötesini kesiyordu, bu yüzden
+      # lidar'ın gördüğü engellerin çoğu hiç çizilmiyordu. 12 m, sensörün
+      # kullanılabilir menzilini (A2M12 spec) kapsar. Maliyet: 240x240 = 57.6k
+      # hücre (eskiden 6.4k); yük sorun olursa önce bu değer düşürülmeli.
+      width: 12
+      height: 12
       resolution: 0.05
       # Square footprint matching rover body (0.38 m × 0.26 m) + 2 cm margin
       footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
@@ -212,9 +216,15 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 4.0
+          # 4.0 -> 12.0: temizleme menzili işaretleme menzilinden büyük
+          # olmalı, aksi halde uzaktaki eski engeller hiç silinmez.
+          raytrace_max_range: 12.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 3.0
+          # 3.0 -> 10.0: asıl kesme buydu. Lidar 12 m'ye kadar dönüş veriyor
+          # ama 3 m'den uzaktaki algılamalar engel olarak işaretlenmediği için
+          # rviz'de daire olarak çizilmiyordu. Geçerli dönüşlerin %99'u 10 m
+          # içinde, dolayısıyla 10 m pratikte tüm algılamaları kapsıyor.
+          obstacle_max_range: 10.0
           obstacle_min_range: 0.0
           inf_is_valid: false
       static_layer:
