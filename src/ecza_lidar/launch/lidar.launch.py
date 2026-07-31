@@ -64,7 +64,12 @@ def generate_launch_description() -> LaunchDescription:
             "max_publish_hz": 8.0,
             "angle_downsample": 2,
             "slam_publish_hz": 2.5,
-            "slam_angle_downsample": 4,
+            # 4 -> 2: lidar zaten tarama başına ~720 binin sadece ~%11'inde
+            # geçerli ölçüm döndürüyor (~79 nokta). Bunun 4'te 3'ünü de atınca
+            # slam_toolbox'a giden taramaların çoğu tamamen boş kalıyordu;
+            # Karto boş taramayı reddettiği için pose graph'a hiç düğüm
+            # eklenmiyor ve /map 0x0 olarak yayınlanıyordu.
+            "slam_angle_downsample": 2,
             "max_slam_angular_z": 0.07,
             "odom_topic": "/odom",
         }],

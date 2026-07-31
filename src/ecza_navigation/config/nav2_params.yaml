@@ -231,9 +231,24 @@ global_costmap:
       global_frame: map
       robot_base_frame: base_link
       transform_tolerance: 3.0
-      rolling_window: true
-      width: 12
-      height: 12
+      # Rolling window KAPALI: static_layer, costmap'i gelen /map ile birebir
+      # aynı boyuta ve orijine getirir (resizeMap). Böylece rviz'de costmap ile
+      # harita tam üst üste biner (tek bölge) ve keşif ilerledikçe costmap de
+      # haritayla birlikte büyür — sabit pencerede kalan kırpma sorunu olmaz.
+      #
+      # ÖNKOŞUL: /map geçerli olmalı. Bu ayar bir kez denenip geri alınmıştı;
+      # o sırada scan_restamper'ın slam_angle_downsample=4 ayarı yüzünden
+      # slam_toolbox'a giden taramalar boş geliyor ve /map KALICI olarak 0x0
+      # kalıyordu. static_layer bunu "malformed" diye reddedince costmap
+      # varsayılan orijinde ([0,12]x[0,12]) asılı kalıyor, harita ile robot
+      # rviz'de iki ayrı bölge gibi görünüyordu. slam_angle_downsample=2
+      # düzeltmesinden sonra harita saniyeler içinde oluştuğu için bu mod
+      # artık güvenli; hizasızlık yalnızca ilk /map gelene kadar sürer.
+      rolling_window: false
+      # Sadece ilk /map mesajı gelene kadar kullanılan başlangıç boyutu;
+      # sonrasında boyutu static_layer belirler.
+      width: 20
+      height: 20
       footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
       footprint_padding: 0.02
       resolution: 0.05
