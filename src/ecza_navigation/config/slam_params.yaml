@@ -29,7 +29,10 @@ slam_toolbox:
     map_update_interval: 1.5
     resolution: 0.05
     min_laser_range: 0.20
-    max_laser_range: 10.0
+    # 10.0 -> 12.0: A2M12'nin spec menzili 12 m (sürücü range_max=16 bildiriyor
+    # ama o değer güvenilir değil). 10 m'de kalınca 10-12 m arasındaki geçerli
+    # dönüşler haritaya hiç işlenmiyor ve harita gereksiz yere erken kesiliyordu.
+    max_laser_range: 12.0
     minimum_time_interval: 0.30
     transform_timeout: 1.5
     tf_buffer_duration: 60.0

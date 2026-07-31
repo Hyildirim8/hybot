@@ -156,6 +156,14 @@ services:
       - rviz
     # Run as the host login user (UID 1000) so the Wayland socket is accessible.
     user: "1000:1000"
+    # Share the host SysV IPC namespace so MIT-SHM works against the host's
+    # X server. Mesa's software rasterizer (llvmpipe) blits each rendered
+    # frame to X via XShmPutImage. With a private IPC namespace the shmid it
+    # sends is resolved by Xwayland in the HOST namespace, so the frames are
+    # written to an unrelated segment and the 3D view stays pure black — while
+    # the Qt panels still paint, because Qt detects the failed XShmAttach and
+    # falls back to XPutImage on its own. Without this the render panel is black.
+    ipc: host
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
