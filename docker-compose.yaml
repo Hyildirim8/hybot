@@ -174,7 +174,7 @@ services:
         # ("Server is already active for display 99"). Clean up first.
         rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
         echo "[rviz] starting Xvfb on :99..."
-        Xvfb :99 -screen 0 1280x800x24 +extension GLX +render -nolisten tcp &
+        Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -nolisten tcp &
         XVFB_PID=$!
         sleep 2
         echo "[rviz] starting x11vnc on port 5901 (no auth — LAN-only)..."
