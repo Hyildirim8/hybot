@@ -11,9 +11,20 @@ Publishes:
   /imu/mag       sensor_msgs/MagneticField
 
 Parameters:
-  i2c_bus    int    1        /dev/i2c-N to open
-  frame_id   str   'imu_link'
-  rate_hz    float  50.0    publish rate
+  i2c_bus                  int    1          /dev/i2c-N to open
+  frame_id                 str   'imu_link'
+  rate_hz                  float  50.0      publish rate
+  gyro_calibration_samples int    200       gyro bias samples averaged at
+                                             startup (~100 Hz); robot must be
+                                             stationary during this window
+  gyro_still_band          float  0.03      rad/s — corrected reading must
+                                             stay under this on all 3 axes
+                                             to count as "not rotating"
+  gyro_still_duration_s    float  2.0       how long the reading must stay
+                                             inside gyro_still_band before
+                                             the bias tracker starts nudging
+  gyro_bias_adapt_rate     float  0.005     EMA weight applied per sample
+                                             while continuously tracking bias
 """
 
 import struct
@@ -67,13 +78,24 @@ class GY85Node(Node):
         self.declare_parameter('i2c_bus',    1)
         self.declare_parameter('frame_id',   'imu_link')
         self.declare_parameter('rate_hz',    50.0)
+        self.declare_parameter('gyro_calibration_samples', 200)
+        self.declare_parameter('gyro_still_band', 0.03)          # rad/s
+        self.declare_parameter('gyro_still_duration_s', 2.0)     # s
+        self.declare_parameter('gyro_bias_adapt_rate', 0.005)    # EMA weight/sample
 
         bus_num     = self.get_parameter('i2c_bus').value
         self.frame  = self.get_parameter('frame_id').value
         rate_hz     = self.get_parameter('rate_hz').value
+        cal_samples = self.get_parameter('gyro_calibration_samples').value
+        self._still_band = float(self.get_parameter('gyro_still_band').value)
+        self._bias_adapt_rate = float(self.get_parameter('gyro_bias_adapt_rate').value)
+        still_duration_s = float(self.get_parameter('gyro_still_duration_s').value)
+        self._still_required = max(1, int(still_duration_s * rate_hz))
+        self._still_count = 0
 
         self.bus = smbus.SMBus(bus_num)
         self._init_sensors()
+        self._gyro_bias = self._calibrate_gyro(cal_samples)
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -109,6 +131,37 @@ class GY85Node(Node):
 
         self.get_logger().info('ADXL345 + ITG3205 + HMC5883L initialized')
 
+    def _calibrate_gyro(self, num_samples: int):
+        # ITG3205 has a fixed (non-zero) rate output at rest — this GY-85
+        # unit measured ~-0.14 rad/s (~-8°/s) on its Z axis. Uncorrected,
+        # that integrates into several full turns of fake yaw drift within
+        # a couple of minutes once nothing else (e.g. wheel-encoder yaw) is
+        # bounding it — see imu-ekf-integration memory, 2026-08-01. Assumes
+        # the robot is stationary at boot, same convention as most cheap
+        # MEMS gyro drivers.
+        self.get_logger().info(
+            f'calibrating gyro bias ({num_samples} samples, ~{num_samples/100.0:.1f}s, '
+            'keep the robot still)...'
+        )
+        sx = sy = sz = 0.0
+        n = 0
+        for _ in range(num_samples):
+            try:
+                x, y, z = self._read_gyro_raw()
+                sx += x
+                sy += y
+                sz += z
+                n += 1
+            except Exception as e:
+                self.get_logger().warn(f'gyro calibration read error: {e}')
+            time.sleep(0.01)  # ITG3205 configured for 100 Hz ODR
+        bias = (sx / n, sy / n, sz / n) if n > 0 else (0.0, 0.0, 0.0)
+        self.get_logger().info(
+            f'gyro bias measured: x={bias[0]:+.4f} y={bias[1]:+.4f} z={bias[2]:+.4f} rad/s '
+            f'({n}/{num_samples} samples)'
+        )
+        return bias
+
     # ── raw reads ───────────────────────────────────────────────────────────────
 
     def _read_accel(self):
@@ -116,10 +169,42 @@ class GY85Node(Node):
         x, y, z = struct.unpack('<3h', bytes(raw))           # little-endian signed
         return x * ADXL_SCALE, y * ADXL_SCALE, z * ADXL_SCALE
 
-    def _read_gyro(self):
+    def _read_gyro_raw(self):
         raw = self.bus.read_i2c_block_data(ITG_ADDR, ITG_GYRO_XOUT_H, 6)
         x, y, z = struct.unpack('>3h', bytes(raw))           # big-endian signed
         return x * ITG_SCALE, y * ITG_SCALE, z * ITG_SCALE
+
+    def _read_gyro(self):
+        x, y, z = self._read_gyro_raw()
+        bx, by, bz = self._gyro_bias
+        cx, cy, cz = x - bx, y - by, z - bz
+        self._track_bias((x, y, z), (cx, cy, cz))
+        return cx, cy, cz
+
+    def _track_bias(self, raw, corrected) -> None:
+        # This ITG3205 doesn't hold a fixed bias — measured a shift of
+        # ~0.1 rad/s within seconds of the one-time startup calibration
+        # (see imu-ekf-integration memory, 2026-08-01), which is enough to
+        # integrate into several fake full turns of yaw drift within a
+        # couple of minutes. Keep tracking it slowly at runtime, but only
+        # while the corrected reading looks like "not rotating" on ALL
+        # three axes — genuine rotation (including a hand-turn, the exact
+        # case this needs to keep working for) pushes the reading well
+        # outside gyro_still_band and resets the counter, so this can't
+        # calibrate away real motion, only slow drift during idle periods.
+        if all(abs(c) < self._still_band for c in corrected):
+            self._still_count += 1
+            if self._still_count >= self._still_required:
+                bx, by, bz = self._gyro_bias
+                rx, ry, rz = raw
+                a = self._bias_adapt_rate
+                self._gyro_bias = (
+                    bx + a * (rx - bx),
+                    by + a * (ry - by),
+                    bz + a * (rz - bz),
+                )
+        else:
+            self._still_count = 0
 
     def _read_mag(self):
         raw = self.bus.read_i2c_block_data(HMC_ADDR, HMC_DATA, 6)
