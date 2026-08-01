@@ -24,8 +24,10 @@ Parameters (from rover_params.yaml):
     angular_invert        (bool, default false) — flip joystick yaw direction
   enable_button         (int, default 5)    — dead-man button (R1)
   require_enable_button (bool, default false)
-  btn_strafe_left       (int, default 6)    — full-speed strafe left  (LT)
-  btn_strafe_right      (int, default 7)    — full-speed strafe right (RT)
+  axis_dpad_x           (int, default 4)    — D-pad horizontal: rear-axle pivot (RL/RR differential)
+  axis_dpad_y           (int, default 5)    — D-pad vertical: front-axle pivot (FL/FR differential)
+  btn_pivot_left        (int, default 6)    — LT: left-side wheels only forward (wide turn)
+  btn_pivot_right       (int, default 7)    — RT: right-side wheels only forward (wide turn)
     btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
     btn_auto_mode_alt     (int, default -1)   — optional alternate toggle button
   btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
@@ -63,8 +65,14 @@ class TeleopNode(Node):
         self.declare_parameter("enable_button", 5)
         self.declare_parameter("enable_button_alt", -1)
         self.declare_parameter("require_enable_button", True)
-        self.declare_parameter("btn_strafe_left", 6)
-        self.declare_parameter("btn_strafe_right", 7)
+        self.declare_parameter("axis_dpad_x", 4)
+        self.declare_parameter("axis_dpad_y", 5)
+        self.declare_parameter("btn_pivot_left", 6)
+        self.declare_parameter("btn_pivot_right", 7)
+        self.declare_parameter("wheel_base", 0.38)
+        self.declare_parameter("wheel_separation_width", 0.26)
+        self.declare_parameter("wheel_radius", 0.04)
+        self.declare_parameter("pivot_wheel_speed_rad_s", 10.0)
         self.declare_parameter("btn_auto_mode", 9)   # Start button
         self.declare_parameter("btn_auto_mode_alt", -1)
         self.declare_parameter("btn_auto_mode_candidates", [9, 8])
@@ -98,8 +106,14 @@ class TeleopNode(Node):
         self._btn_en = self.get_parameter("enable_button").value
         self._btn_en_alt = self.get_parameter("enable_button_alt").value
         self._require_en = self.get_parameter("require_enable_button").value
-        self._btn_sl = self.get_parameter("btn_strafe_left").value
-        self._btn_sr = self.get_parameter("btn_strafe_right").value
+        self._ax_dpad_x = self.get_parameter("axis_dpad_x").value
+        self._ax_dpad_y = self.get_parameter("axis_dpad_y").value
+        self._btn_pivot_left = self.get_parameter("btn_pivot_left").value
+        self._btn_pivot_right = self.get_parameter("btn_pivot_right").value
+        self._pivot_wheel_base = float(self.get_parameter("wheel_base").value)
+        self._pivot_wheel_sep = float(self.get_parameter("wheel_separation_width").value)
+        self._pivot_wheel_radius = float(self.get_parameter("wheel_radius").value)
+        self._pivot_wheel_speed = float(self.get_parameter("pivot_wheel_speed_rad_s").value)
         self._btn_auto = self.get_parameter("btn_auto_mode").value
         self._btn_auto_alt = self.get_parameter("btn_auto_mode_alt").value
         self._btn_auto_candidates = self._normalise_button_candidates(
@@ -114,6 +128,21 @@ class TeleopNode(Node):
         self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
         self._max_ang = self.get_parameter("max_angular_speed").value
+
+        # ── Axle/side pivot geometry ─────────────────────────────────────
+        # LT/RT and D-pad drive one wheel pair forward while leaving the
+        # opposite pair at zero, by combining a linear component with a
+        # rotation component in the exact ratio (wz = linear / pivot_k)
+        # that the mecanum IK needs to cancel the idle pair to zero.
+        # pivot_k matches wheel_bridge.py's kinematic_k = wheel_base/2 + wheel_separation_width/2.
+        # pivot_wheel_speed_rad_s is the target speed for the ACTIVE wheel pair;
+        # keep it well under the firmware's MAX_SPEED_RAD_S (18.75) — the active
+        # pair's demand is vx+k*wz combined, not vx or wz alone, so it saturates
+        # at roughly half the speed a pure-vx or pure-wz command would tolerate.
+        self._pivot_k = max(
+            1e-6, (self._pivot_wheel_base / 2.0) + (self._pivot_wheel_sep / 2.0)
+        )
+        self._pivot_v = self._pivot_wheel_speed * self._pivot_wheel_radius
         self._deadzone = self.get_parameter("joy_deadzone").value
         self._reject_extreme_axis_startup = bool(
             self.get_parameter("reject_extreme_axis_startup").value
@@ -213,7 +242,8 @@ class TeleopNode(Node):
             f"teleop_node ready — axes lx={self._ax_lx} ly={self._ax_ly} "
             f"az={self._ax_az}, enable_btn={self._btn_en}, "
             f"enable_btn_alt={self._btn_en_alt}, "
-            f"strafe_left_btn={self._btn_sl}, strafe_right_btn={self._btn_sr}, "
+            f"dpad_axes=({self._ax_dpad_x},{self._ax_dpad_y}), "
+            f"pivot_left_btn={self._btn_pivot_left}, pivot_right_btn={self._btn_pivot_right}, "
             f"auto_mode_buttons={self._auto_button_indices()}, "
             f"nav_cmd_topic={self._nav_cmd_topic}, start_in_autonomous={self._start_in_autonomous}, "
             f"require_enable={self._require_en}, "
@@ -452,22 +482,47 @@ class TeleopNode(Node):
         # ── Forward / backward (stick) ─────────────────────────────────
         vx = axis(self._ax_lx) * self._max_lin
 
-        # ── Strafe: stick axis PLUS dedicated buttons (additive, clamped) ─
+        # ── Strafe: left stick X only ──────────────────────────────────────
         # strafe_invert=false → positive vy = RIGHT (hardware convention on this rover)
         # strafe_invert=true  → positive vy = LEFT  (ROS REP-103 convention)
-        # Flip strafe_invert in rover_params.yaml if D-pad/LT/RT directions are reversed.
+        # Flip strafe_invert in rover_params.yaml if the stick direction is reversed.
         ss = -1.0 if self._strafe_invert else 1.0
-        vy_stick = ss * axis(self._ax_ly) * self._max_lin
-        vy_btn = 0.0
-        if btn(self._btn_sl):   # LT → strafe left
-            vy_btn -= ss * self._max_lin
-        if btn(self._btn_sr):   # RT → strafe right
-            vy_btn += ss * self._max_lin
-        vy = max(-self._max_lin, min(self._max_lin, vy_stick + vy_btn))
+        vy = ss * axis(self._ax_ly) * self._max_lin
 
-        # ── Rotation: right stick X ─────────────────────────────────────
+        # ── Rotation: right stick X (analog) ───────────────────────────────
+        # wz > 0 = CCW, wz < 0 = CW (REP-103; verified against real wheel spin).
         angular_sign = 1.0 if self._angular_invert else -1.0
         wz = angular_sign * axis(self._ax_az) * self._max_ang
+
+        def dpad(idx: int, sign: float) -> bool:
+            return idx < len(msg.axes) and (msg.axes[idx] * sign) > 0.5
+
+        # ── Digital axle/side pivots: one wheel pair forward, the other
+        # pair held at zero (not a simple in-place spin — see teleop-button-
+        # mapping memory / rover_params.yaml comments for the wheel-pair map).
+        pv, pk = self._pivot_v, self._pivot_k
+        if btn(self._btn_pivot_left):     # LT → left side only forward (wide turn)
+            vx += pv / 2.0
+            wz += -pv / (2.0 * pk)
+        if btn(self._btn_pivot_right):    # RT → right side only forward (wide turn)
+            vx += pv / 2.0
+            wz += pv / (2.0 * pk)
+        if dpad(self._ax_dpad_x, -1.0):   # D-pad LEFT → rear axle: RL fwd, RR back
+            vy += pv / 2.0
+            wz += -pv / (2.0 * pk)
+        if dpad(self._ax_dpad_x, 1.0):    # D-pad RIGHT → rear axle: RR fwd, RL back
+            vy += -pv / 2.0
+            wz += pv / (2.0 * pk)
+        if dpad(self._ax_dpad_y, 1.0):    # D-pad UP → front axle: FL fwd, FR back
+            vy += -pv / 2.0
+            wz += -pv / (2.0 * pk)
+        if dpad(self._ax_dpad_y, -1.0):   # D-pad DOWN → front axle: FR fwd, FL back
+            vy += pv / 2.0
+            wz += pv / (2.0 * pk)
+
+        vx = max(-self._max_lin, min(self._max_lin, vx))
+        vy = max(-self._max_lin, min(self._max_lin, vy))
+        wz = max(-self._max_ang, min(self._max_ang, wz))
 
         twist = Twist()
         twist.linear.x  = vx
@@ -542,9 +597,11 @@ class TeleopNode(Node):
             abs(self._apply_deadzone(self._raw_axis(msg, self._ax_lx))) > 0.0
             or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_ly))) > 0.0
             or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_az))) > 0.0
+            or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_dpad_x))) > 0.0
+            or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_dpad_y))) > 0.0
         )
-        active_buttons = self._button_pressed(msg, self._btn_sl) or self._button_pressed(
-            msg, self._btn_sr
+        active_buttons = self._button_pressed(msg, self._btn_pivot_left) or self._button_pressed(
+            msg, self._btn_pivot_right
         )
         return active_axes or active_buttons
 
