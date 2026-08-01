@@ -27,13 +27,21 @@ ekf_filter_node:
 
     # ── Source 0: mecanum_drive_controller wheel-encoder odometry ────────────
     # nav_msgs/Odometry:
-    #   pose.pose  in odom frame    → x, y, yaw absolute position
-    #   twist.twist in body frame   → vx, vy, vyaw velocities
+    #   pose.pose  in odom frame    → x, y absolute position (yaw excluded, see below)
+    #   twist.twist in body frame   → vx, vy velocities (vyaw excluded, see below)
+    #
+    # 2026-08-01: yaw position AND vyaw were both enabled here. Wheel-encoder
+    # yaw doesn't move at all when the robot is picked up and turned by hand
+    # (or whenever wheels slip) — but this being an ABSOLUTE pose measurement
+    # meant the EKF kept correcting the gyro-tracked yaw back toward whatever
+    # frozen heading the wheels last reported, so the fused orientation
+    # visibly snapped back to "straight" a moment after a hand-turn. Yaw is
+    # now IMU-only (gyro) — wheel odom contributes x/y/vx/vy translation only.
     odom0: /odom
     odom0_config: [true,  true,  false,    # x,  y,  z       (pose — 2D only)
-                   false, false, true,     # ro, pi, yaw      (pose — 2D only)
+                   false, false, false,    # ro, pi, yaw      (excluded — see note above)
                    true,  true,  false,    # vx, vy, vz       (twist body-frame)
-                   false, false, true,     # vro,vpi,vyaw     (twist body-frame)
+                   false, false, false,    # vro,vpi,vyaw     (excluded — see note above)
                    false, false, false]    # ax, ay, az       (not in odom msg)
     odom0_queue_size: 5
     odom0_differential: false   # pose is absolute in odom frame
