@@ -154,35 +154,13 @@ services:
     <<: *ros-service
     profiles:
       - rviz
-    # Run as the host login user (UID 1000) so the Wayland socket is accessible.
-    user: "1000:1000"
-    # Share the host SysV IPC namespace so MIT-SHM works against the host's
-    # X server. Mesa's software rasterizer (llvmpipe) blits each rendered
-    # frame to X via XShmPutImage. With a private IPC namespace the shmid it
-    # sends is resolved by Xwayland in the HOST namespace, so the frames are
-    # written to an unrelated segment and the 3D view stays pure black — while
-    # the Qt panels still paint, because Qt detects the failed XShmAttach and
-    # falls back to XPutImage on its own. Without this the render panel is black.
-    ipc: host
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
-      # Display: use XWayland (xcb) via DISPLAY=:0 — more reliable inside
-      # Docker on RPi/labwc than the wayland socket. Wayland socket is still
-      # mounted so qtwayland5 can be used if xcb is unavailable.
-      DISPLAY: ":0"
-      XAUTHORITY: /tmp/.host_Xauthority
-      QT_QPA_PLATFORM: xcb
+      DISPLAY: ":99"
       LIBGL_ALWAYS_SOFTWARE: "1"
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
-      WAYLAND_DISPLAY: wayland-0
-      XDG_RUNTIME_DIR: /run/user/1000
     volumes:
-      # Wayland runtime dir — contains wayland-0 socket
-      - /run/user/1000:/run/user/1000:rw
-      # XWayland socket — fallback
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      - /home/master/.Xauthority:/tmp/.host_Xauthority:ro
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
@@ -190,16 +168,104 @@ services:
       - bash
       - -c
       - |
-        # Wait for robot_state_publisher to be ready before RViz subscribes.
-        # robot_description service takes ~5 s to start controllers on RPi.
-        # Qt requires 0700 on XDG_RUNTIME_DIR; host labwc creates it 0770.
-        chmod 0700 /run/user/1000 2>/dev/null || true
+        # restart:unless-stopped restarts THIS container's process, not a
+        # fresh filesystem — stale lock files from a crashed Xvfb survive
+        # into the next attempt and block it from starting at all
+        # ("Server is already active for display 99"). Clean up first.
+        rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
+        echo "[rviz] starting Xvfb on :99..."
+        Xvfb :99 -screen 0 1280x800x24 +extension GLX +render -nolisten tcp &
+        XVFB_PID=$!
+        sleep 2
+        echo "[rviz] starting x11vnc on port 5901 (no auth — LAN-only)..."
+        # -auth /dev/null: Xvfb was started with no -auth cookie file (no
+        # access control needed for a container-local display), but x11vnc
+        # otherwise tries to auto-locate one and errors out when it can't.
+        x11vnc -display :99 -auth /dev/null -nopw -forever -shared -rfbport 5901 -bg -o /tmp/x11vnc.log -quiet
         echo "[rviz] waiting 8 s for robot_state_publisher..."
         sleep 8
-        exec ros2 launch ecza_description display.launch.py \
-          gui:=false \
-          rvizconfig:=/config/rover.rviz
-    restart: "no"
+        # Crash-supervisor loop: only rviz2 restarts on crash, not the whole
+        # container. Xvfb/x11vnc stay up across a crash, so the VNC session
+        # doesn't drop — the viewer just sees rviz2's window disappear and
+        # reappear a couple seconds later instead of losing the connection.
+        # (Not using `ros2 launch display.launch.py` here: it also starts
+        # its own robot_state_publisher, duplicating the one already
+        # running in robot_description, and it doesn't propagate rviz2's
+        # exit code, which this loop needs to detect a crash.)
+        CRASH_COUNT=0
+        while true; do
+          ros2 run rviz2 rviz2 -d /config/rover.rviz --ros-args -p use_sim_time:=false
+          EXIT_CODE=$$?
+          CRASH_COUNT=$$((CRASH_COUNT + 1))
+          echo "[rviz] rviz2 exited (code $$EXIT_CODE, crash #$$CRASH_COUNT) — restarting in 2s"
+          sleep 2
+        done
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── imu ───────────────────────────────────────────────────────────────────
+  # GY-85 9-DOF IMU module on I2C bus 1 (RPi5 GPIO2=SDA, GPIO3=SCL).
+  # Publishes /imu/data_raw (sensor_msgs/Imu) and /imu/mag (MagneticField).
+  # Requires I2C enabled on the RPi: sudo raspi-config → Interface → I2C → On
+  # Verify sensor addresses: sudo i2cdetect -y 1  (expect: 1e, 53, 68)
+  imu:
+    <<: *ros-service
+    user: root                               # /dev/i2c-1 requires root or i2c group
+    privileged: true
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_imu/ecza_imu/imu_node.py:/imu_node.py:ro
+    devices:
+      - /dev/i2c-1:/dev/i2c-1
+    command:
+      - bash
+      - -c
+      - |
+        ros2 run tf2_ros static_transform_publisher \
+          --ros-args -r __node:=imu_tf_pub \
+          -- 0.0 0.0 0.05 0.0 0.0 0.0 base_link imu_link &
+        exec python3 /imu_node.py \
+          --ros-args \
+          -p i2c_bus:=1 \
+          -p frame_id:=imu_link \
+          -p rate_hz:=50.0
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── csi_camera ───────────────────────────────────────────────────────────
+  # RPi Camera Module 2 (imx219) on the CAM0/CSI port. Capture itself runs on
+  # the HOST (scripts/csi_cam_stream.sh + ecza-robotu-csi-cam.service) — the
+  # imx219's PiSP ISP pipeline needs this host's own libcamera build, which
+  # has no matching package inside the container's Ubuntu 22.04 apt repos.
+  # This container just runs the ROS-side TCP client (network_mode: host
+  # reaches the host streamer at 127.0.0.1) and republishes frames as
+  # sensor_msgs/CompressedImage, same pattern as the esp32cam `camera` service.
+  # Publishes /camera_csi/image_raw/compressed.
+  # View at http://<rpi-ip>:8081/ or rqt_image_view — deliberately NOT added
+  # as an rviz Image display (segfaults rviz2 under this container's
+  # Xvfb+llvmpipe setup even when disabled; see rover.rviz's Map display
+  # comment).
+  csi_camera:
+    <<: *ros-service
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_camera/ecza_camera/rpicam_node.py:/rpicam_node.py:ro
+    command:
+      - bash
+      - -c
+      - |
+        ros2 run tf2_ros static_transform_publisher \
+          --ros-args -r __node:=csi_camera_tf_pub \
+          -- 0.15 0.0 0.15 0.0 0.0 0.0 base_link csi_camera_link &
+        exec python3 /rpicam_node.py \
+          --ros-args \
+          -p host:=127.0.0.1 \
+          -p port:=${CSI_CAM_PORT:-8090} \
+          -p frame_id:=csi_camera_link \
+          -p http_port:=8081
+    restart: unless-stopped
     depends_on:
       - robot_description
 
@@ -226,6 +292,32 @@ services:
       bash -c "ros2 bag record
       -o /bags/session_$$(date +%Y%m%d_%H%M%S)
       /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /joint_states /diagnostics /scan /map /autonomous_mode"
+
+  # ── ekf ───────────────────────────────────────────────────────────────────
+  # robot_localization EKF: fuses mecanum encoder odom (/odom) with the GY-85
+  # gyro-z (/imu/data_raw) so the robot doesn't slip/drift relative to the
+  # lidar while moving — publishes /odometry/filtered and owns the
+  # odom→base_link TF (controllers.yaml enable_odom_tf: false hands this off).
+  # Profile: nav — only needed when SLAM/Nav2 is consuming the TF tree.
+  ekf:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/ekf.yaml:/config/ekf.yaml:ro
+    command:
+      - ros2
+      - run
+      - robot_localization
+      - ekf_node
+      - --ros-args
+      - --params-file
+      - /config/ekf.yaml
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+      - imu
 
   # ── slam_manager ──────────────────────────────────────────────────────────
   # SLAM haritalama yöneticisi ve otonom frontier keşfi.

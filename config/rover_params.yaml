@@ -34,17 +34,18 @@
     #   5 = D-pad Y         (up=+1,   down=-1)
     # Buttons (12 total):
     #   0=X   1=A   2=B   3=Y
-    #   4=LB(dead-man alt)  5=RB(dead-man)  6=LT(sol taraf pivot)  7=RT(sağ taraf pivot)
+    #   4=LB(dead-man alt)  5=RB(dead-man)  6=LT(sağ taraf pivot)  7=RT(sol taraf pivot)
     #   8=Back  9=Start  10=L3  11=R3
     #
     # Pivot hareketleri (LT/RT/D-pad): 4 tekerden sadece bir çifti hareket eder,
-    # diğer çift tam sıfırda kalır (yerinde dönüş DEĞİL, tek taraf/aks pivotu):
-    #   LT          → sol taraf (FL+RL) ileri, sağ taraf sabit → geniş sağa dönüş
-    #   RT          → sağ taraf (FR+RR) ileri, sol taraf sabit → geniş sola dönüş
-    #   D-pad sol   → arka aks: RL ileri / RR geri, ön aks sabit
-    #   D-pad sağ   → arka aks: RR ileri / RL geri, ön aks sabit
-    #   D-pad yukarı→ ön aks: FL ileri / FR geri, arka aks sabit
-    #   D-pad aşağı → ön aks: FR ileri / FL geri, arka aks sabit
+    # diğer çift tam sıfırda kalır (yerinde dönüş DEĞİL, tek taraf/aks pivotu).
+    # 2026-08-01: yönler ters bildirilmişti (ilk yazımda), çevrildi:
+    #   LT          → sağ taraf (FR+RR) ileri, sol taraf sabit → geniş sola dönüş
+    #   RT          → sol taraf (FL+RL) ileri, sağ taraf sabit → geniş sağa dönüş
+    #   D-pad sol   → arka aks: RR ileri / RL geri, ön aks sabit
+    #   D-pad sağ   → arka aks: RL ileri / RR geri, ön aks sabit
+    #   D-pad yukarı→ ön aks: FR ileri / FL geri, arka aks sabit
+    #   D-pad aşağı → ön aks: FL ileri / FR geri, arka aks sabit
     joy_deadzone: 0.05             # [0, 1) — smoother low-speed stick response
     axis_linear_x: 1               # left  stick Y — forward / backward
     axis_linear_y: 0               # left stick X: right=+1 from joystick, ROS right strafe must be -Y
@@ -55,10 +56,10 @@
     require_enable_button: false   # manuel modda RB/LB basmadan sürüş aktif
     axis_dpad_x: 4                 # D-pad sol/sağ — arka aks pivotu (yukarıdaki tabloya bak)
     axis_dpad_y: 5                 # D-pad yukarı/aşağı — ön aks pivotu (yukarıdaki tabloya bak)
-    btn_pivot_left: 6              # LT — sadece sol taraf tekerleri ileri (geniş dönüş)
-    btn_pivot_right: 7             # RT — sadece sağ taraf tekerleri ileri (geniş dönüş)
+    btn_pivot_left: 6              # LT — sadece sağ taraf tekerleri ileri (geniş dönüş, 2026-08-01 ters çevrildi)
+    btn_pivot_right: 7             # RT — sadece sol taraf tekerleri ileri (geniş dönüş, 2026-08-01 ters çevrildi)
     pivot_wheel_speed_rad_s: 10.0  # aktif teker çifti hedef hızı; firmware MAX_SPEED_RAD_S=18.75'i satüre etmesin diye düşük tutuldu
-    strafe_invert: false           # manuel strafe: sol stick sağ/sol ters hareket ediyordu, çevrildi
+    strafe_invert: false           # manuel strafe: hem manuel hem rvizde ters bildirildi, false'a geri alındı (2026-08-01)
     auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
     btn_auto_mode_alt: -1          # no alternate toggle

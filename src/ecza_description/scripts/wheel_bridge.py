@@ -252,9 +252,13 @@ class WheelBridge(Node):
         k = self._kinematic_k
 
         vx = (r / 4.0) * (fl + fr + rl + rr)
-        # Rover command path uses the opposite lateral sign from ROS REP-103.
-        # Flip encoder-derived vy here so /odom and RViz follow ROS (+Y=left).
-        vy = (r / 4.0) * (fl - fr - rl + rr)
+        # Mathematical inverse of this function's own wheel reconstruction
+        # below (fl=vx-vy-kwz, fr=vx+vy+kwz, rl=vx+vy-kwz, rr=vx-vy+kwz).
+        # 2026-08-01: this used to be negated ("-fl+fr-rl+rr flipped to
+        # fl-fr-rl+rr") to supposedly correct a REP-103 mismatch — verified
+        # live that this made /odom's vy sign opposite the commanded (and
+        # physically executed) direction. Removed the flip.
+        vy = (r / 4.0) * (-fl + fr + rl - rr)
         wz = (r / (4.0 * k)) * (-fl + fr - rl + rr)
 
         vx *= self._odom_linear_scale
