@@ -26,8 +26,8 @@ Parameters (from rover_params.yaml):
   require_enable_button (bool, default false)
   axis_dpad_x           (int, default 4)    — D-pad horizontal: rear-axle pivot (RL/RR differential)
   axis_dpad_y           (int, default 5)    — D-pad vertical: front-axle pivot (FL/FR differential)
-  btn_pivot_left        (int, default 6)    — LT: left-side wheels only forward (wide turn)
-  btn_pivot_right       (int, default 7)    — RT: right-side wheels only forward (wide turn)
+  btn_pivot_left        (int, default 6)    — LT: right-side wheels only forward (wide turn)
+  btn_pivot_right       (int, default 7)    — RT: left-side wheels only forward (wide turn)
     btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
     btn_auto_mode_alt     (int, default -1)   — optional alternate toggle button
   btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
@@ -500,25 +500,29 @@ class TeleopNode(Node):
         # ── Digital axle/side pivots: one wheel pair forward, the other
         # pair held at zero (not a simple in-place spin — see teleop-button-
         # mapping memory / rover_params.yaml comments for the wheel-pair map).
+        # 2026-08-01: directions reported reversed from the intended wheel-pair
+        # map (user mis-described the reference diagram) — every branch below
+        # is negated relative to the first implementation so each physical
+        # button/direction now drives the opposite wheel pair.
         pv, pk = self._pivot_v, self._pivot_k
-        if btn(self._btn_pivot_left):     # LT → left side only forward (wide turn)
-            vx += pv / 2.0
-            wz += -pv / (2.0 * pk)
-        if btn(self._btn_pivot_right):    # RT → right side only forward (wide turn)
+        if btn(self._btn_pivot_left):     # LT → right side only forward (wide turn)
             vx += pv / 2.0
             wz += pv / (2.0 * pk)
-        if dpad(self._ax_dpad_x, -1.0):   # D-pad LEFT → rear axle: RL fwd, RR back
-            vy += pv / 2.0
+        if btn(self._btn_pivot_right):    # RT → left side only forward (wide turn)
+            vx += pv / 2.0
             wz += -pv / (2.0 * pk)
-        if dpad(self._ax_dpad_x, 1.0):    # D-pad RIGHT → rear axle: RR fwd, RL back
+        if dpad(self._ax_dpad_x, -1.0):   # D-pad LEFT → rear axle: RR fwd, RL back
             vy += -pv / 2.0
             wz += pv / (2.0 * pk)
-        if dpad(self._ax_dpad_y, 1.0):    # D-pad UP → front axle: FL fwd, FR back
-            vy += -pv / 2.0
+        if dpad(self._ax_dpad_x, 1.0):    # D-pad RIGHT → rear axle: RL fwd, RR back
+            vy += pv / 2.0
             wz += -pv / (2.0 * pk)
-        if dpad(self._ax_dpad_y, -1.0):   # D-pad DOWN → front axle: FR fwd, FL back
+        if dpad(self._ax_dpad_y, 1.0):    # D-pad UP → front axle: FR fwd, FL back
             vy += pv / 2.0
             wz += pv / (2.0 * pk)
+        if dpad(self._ax_dpad_y, -1.0):   # D-pad DOWN → front axle: FL fwd, FR back
+            vy += -pv / 2.0
+            wz += -pv / (2.0 * pk)
 
         vx = max(-self._max_lin, min(self._max_lin, vx))
         vy = max(-self._max_lin, min(self._max_lin, vy))

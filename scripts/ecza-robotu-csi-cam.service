@@ -1,0 +1,21 @@
+[Unit]
+Description=ecza-robotu CSI camera (RPi Camera Module 2, CAM0) MJPEG source
+Documentation=https://github.com/ecza-robotu
+# Runs on the host (not in Docker) — see scripts/csi_cam_stream.sh for why.
+# ecza-robotu.service's ROS container connects to this over network_mode: host.
+Before=ecza-robotu.service
+
+[Service]
+Type=simple
+User=master
+Environment=CSI_CAM_PORT=8090
+ExecStart=/bin/bash /home/master/Workspace/ecza-robotu/scripts/csi_cam_stream.sh
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ecza-robotu-csi-cam
+
+[Install]
+WantedBy=multi-user.target
