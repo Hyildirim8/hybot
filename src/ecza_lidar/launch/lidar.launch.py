@@ -70,7 +70,13 @@ def generate_launch_description() -> LaunchDescription:
             # Karto boş taramayı reddettiği için pose graph'a hiç düğüm
             # eklenmiyor ve /map 0x0 olarak yayınlanıyordu.
             "slam_angle_downsample": 2,
-            "max_slam_angular_z": 0.07,
+            # 0.07 -> 0.65: bu kadar düşük bir eşik robot ~4°/sn'den hızlı
+            # döndüğü an SLAM'a scan gitmesini tamamen kesiyordu — dönüş
+            # boyunca SLAM kör kalıyor, sadece dead-reckoning ile ilerliyor,
+            # dönüş bitince biriken hata haritaya tek seferde işleniyor ve
+            # düzeltilmiyordu ("harita kayması"). 0.65 daha önce doğrulanmış
+            # çalışan değer.
+            "max_slam_angular_z": 0.65,
             "odom_topic": "/odom",
         }],
     )
