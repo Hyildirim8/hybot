@@ -27,7 +27,7 @@ networked machine, or open http://<rpi-ip>:<http_port>/ in a browser.
 import socket
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import rclpy
 from rclpy.node import Node
@@ -41,7 +41,7 @@ MAX_FRAME = 2_000_000
 
 # Shared between the reader thread (writer) and HTTP server threads
 # (readers) — module-level so MJPEGHandler (instantiated per-request by
-# HTTPServer) can reach the latest frame without a node reference.
+# ThreadingHTTPServer) can reach the latest frame without a node reference.
 _latest_frame: bytes = None
 _frame_seq = 0
 _frame_cond = threading.Condition()
@@ -108,7 +108,13 @@ class RpicamNode(Node):
         self._pub_compressed = self.create_publisher(
             CompressedImage, 'camera_csi/image_raw/compressed', qos)
 
-        self._http_server = HTTPServer(('0.0.0.0', self._http_port), MJPEGHandler)
+        # ThreadingHTTPServer, not plain HTTPServer: the /stream handler
+        # never returns (infinite MJPEG write loop), so a single-threaded
+        # server can only ever serve ONE viewer — every other client (a
+        # second browser tab, remote_teleop_client.py, even curl from
+        # localhost) hangs on connect until that one viewer disconnects.
+        # See remote-teleop memory, 2026-08-01.
+        self._http_server = ThreadingHTTPServer(('0.0.0.0', self._http_port), MJPEGHandler)
         self._http_server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         threading.Thread(target=self._http_server.serve_forever, daemon=True).start()
         self.get_logger().info(f'MJPEG stream: http://0.0.0.0:{self._http_port}/')

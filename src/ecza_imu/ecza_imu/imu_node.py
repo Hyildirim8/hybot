@@ -17,17 +17,28 @@ Parameters:
   gyro_calibration_samples int    200       gyro bias samples averaged at
                                              startup (~100 Hz); robot must be
                                              stationary during this window
-  gyro_still_band          float  0.03      rad/s — corrected reading must
-                                             stay under this on all 3 axes
-                                             to count as "not rotating"
-  gyro_still_duration_s    float  2.0       how long the reading must stay
-                                             inside gyro_still_band before
-                                             the bias tracker starts nudging
+  gyro_still_band          float  0.18      rad/s — max-min spread of the
+                                             RAW reading over the last ~0.4s
+                                             must stay under this on all 3
+                                             axes to count as "not rotating"
+                                             (tests signal stability, not
+                                             its absolute value — see
+                                             _track_bias). 2026-08-03: raised
+                                             from 0.03 — live raw spread while
+                                             genuinely stationary measured
+                                             ~0.13 rad/s (I2C bus noise, see
+                                             "lost arbitration" errors on
+                                             i2c-1), so 0.03 never passed and
+                                             the tracker could never lock.
+  gyro_still_duration_s    float  2.0       how long that stability must
+                                             hold before the bias tracker
+                                             starts nudging
   gyro_bias_adapt_rate     float  0.005     EMA weight applied per sample
                                              while continuously tracking bias
 """
 
 import struct
+from collections import deque
 import time
 import smbus                                 # python3-smbus (i2c-tools)
 
@@ -79,7 +90,7 @@ class GY85Node(Node):
         self.declare_parameter('frame_id',   'imu_link')
         self.declare_parameter('rate_hz',    50.0)
         self.declare_parameter('gyro_calibration_samples', 200)
-        self.declare_parameter('gyro_still_band', 0.03)          # rad/s
+        self.declare_parameter('gyro_still_band', 0.18)          # rad/s
         self.declare_parameter('gyro_still_duration_s', 2.0)     # s
         self.declare_parameter('gyro_bias_adapt_rate', 0.005)    # EMA weight/sample
 
@@ -92,6 +103,9 @@ class GY85Node(Node):
         still_duration_s = float(self.get_parameter('gyro_still_duration_s').value)
         self._still_required = max(1, int(still_duration_s * rate_hz))
         self._still_count = 0
+        # Short rolling window used only to test raw-signal stability
+        # (spread), independent of still_duration_s — see _track_bias.
+        self._raw_window = deque(maxlen=max(2, int(0.4 * rate_hz)))
 
         self.bus = smbus.SMBus(bus_num)
         self._init_sensors()
@@ -186,17 +200,40 @@ class GY85Node(Node):
         # ~0.1 rad/s within seconds of the one-time startup calibration
         # (see imu-ekf-integration memory, 2026-08-01), which is enough to
         # integrate into several fake full turns of yaw drift within a
-        # couple of minutes. Keep tracking it slowly at runtime, but only
-        # while the corrected reading looks like "not rotating" on ALL
-        # three axes — genuine rotation (including a hand-turn, the exact
-        # case this needs to keep working for) pushes the reading well
-        # outside gyro_still_band and resets the counter, so this can't
-        # calibrate away real motion, only slow drift during idle periods.
-        if all(abs(c) < self._still_band for c in corrected):
+        # couple of minutes.
+        #
+        # 2026-08-01 v2: the first version of this gated adaptation on the
+        # CORRECTED reading staying near zero. That's circular — once the
+        # true bias has drifted far enough that the corrected reading no
+        # longer looks "still", the tracker can never re-lock, because its
+        # own stillness test depends on the bias estimate it's trying to
+        # fix. Confirmed live: bias drifted back to ~-0.12 rad/s and stayed
+        # there, un-adapted, for the rest of the session.
+        #
+        # Fixed by testing "stillness" on the RAW signal's short-term
+        # SPREAD (max-min over a small rolling window) instead of its
+        # absolute value — a call this can't get wrong regardless of how
+        # stale the current bias estimate is: a raw reading that isn't
+        # *changing* means angular velocity isn't changing, which is true
+        # whether the current bias guess is 0 or wildly off. A real hand
+        # rotation's onset (acceleration) breaks this immediately; a sustained
+        # hand turn at a genuinely constant rate could in theory slip through,
+        # but that's not how hand-turns actually happen in practice.
+        self._raw_window.append(raw)
+        if len(self._raw_window) < self._raw_window.maxlen:
+            return
+
+        spreads = [
+            max(w[axis] for w in self._raw_window) - min(w[axis] for w in self._raw_window)
+            for axis in range(3)
+        ]
+        if all(s < self._still_band for s in spreads):
             self._still_count += 1
             if self._still_count >= self._still_required:
                 bx, by, bz = self._gyro_bias
-                rx, ry, rz = raw
+                rx = sum(w[0] for w in self._raw_window) / len(self._raw_window)
+                ry = sum(w[1] for w in self._raw_window) / len(self._raw_window)
+                rz = sum(w[2] for w in self._raw_window) / len(self._raw_window)
                 a = self._bias_adapt_rate
                 self._gyro_bias = (
                     bx + a * (rx - bx),
