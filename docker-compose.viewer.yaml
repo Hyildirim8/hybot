@@ -1,0 +1,52 @@
+# docker-compose.viewer.yaml — Standalone RViz2 viewer, meant to run on YOUR
+# Ubuntu PC (not the Pi). Renders with your own GPU over X11 — no Xvfb,
+# no x11vnc, no VNC round-trip, and takes zero CPU/GPU load off the Pi.
+#
+# The Pi's `rviz` service (docker-compose.yaml) does NOT need to be running
+# for this — robot_description/lidar/slam_manager on the Pi already publish
+# /robot_description, TF, /scan_slam and /map over the network (Fast-DDS,
+# network_mode: host, UDP multicast). This container only subscribes.
+#
+# Usage (on the PC, same LAN as the robot):
+#   git clone/pull this repo onto the PC
+#   xhost +local:docker
+#   ROS_DOMAIN_ID=0 docker compose -f docker-compose.viewer.yaml up --build
+#
+# Requirements:
+#   - Docker + docker compose, Ubuntu 22.04 (or WSL2/Ubuntu 22.04 with an
+#     X server such as WSLg or VcXsrv)
+#   - Same LAN as the Pi with UDP multicast reaching it. Sanity check once
+#     the container is up: `docker compose -f docker-compose.viewer.yaml exec
+#     rviz_viewer ros2 topic list` — if the robot's topics (/scan_slam, /map,
+#     /tf) don't show up, Wi-Fi client-isolation is likely blocking multicast;
+#     see config/fastdds_udp.xml for the profile pattern (would need an
+#     initial-peers entry pointing at the Pi's IP instead, same idea as
+#     config/fastdds_sim.xml's Isaac Sim peer).
+#   - /dev/dri present for GPU passthrough (Intel/AMD integrated/discrete).
+#     NVIDIA: drop the `devices:` line and use the nvidia-container-toolkit
+#     runtime instead (`--gpus all` / deploy.resources.reservations.devices).
+#
+# Deliberately does NOT start robot_state_publisher or
+# joint_state_publisher_gui — the Pi's real hardware.launch.py already
+# publishes /robot_description and /joint_states from the wheel encoders.
+# Starting a second copy here would fight the real one.
+
+services:
+  rviz_viewer:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: runtime
+    image: ecza-robotu:runtime
+    network_mode: host   # required for Fast-DDS UDP multicast discovery, same as the Pi stack
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      DISPLAY: ${DISPLAY}
+      QT_QPA_PLATFORM: xcb
+      LIBGL_ALWAYS_SOFTWARE: "0"   # use the PC's real GPU instead of the Pi's forced llvmpipe
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
+    devices:
+      - /dev/dri:/dev/dri
+    command: ["rviz2", "-d", "/config/rover.rviz", "--ros-args", "-p", "use_sim_time:=false"]

@@ -269,6 +269,31 @@ services:
     depends_on:
       - robot_description
 
+  # ── remote_teleop ────────────────────────────────────────────────────────
+  # Lets a joystick plugged into a REMOTE machine (not this Pi) drive the
+  # rover from anywhere reachable over the network — entirely additive, does
+  # NOT touch the local joy/teleop setup (that keeps working exactly as
+  # before). remote_joy_bridge.py listens on REMOTE_TELEOP_PORT and
+  # republishes whatever it receives as sensor_msgs/Joy on /joy, so
+  # teleop_node.py can't tell it apart from the local F710 — every existing
+  # behaviour (dead-man, strafe_invert, pivot mapping, scan safety, AUTO/
+  # TELEOP handoff) keeps working unmodified for this input too.
+  # Client: scripts/remote_teleop_client.py (runs on the remote PC).
+  remote_teleop:
+    <<: *ros-service
+    volumes:
+      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./src/ecza_teleop/ecza_teleop/remote_joy_bridge.py:/remote_joy_bridge.py:ro
+    command:
+      - python3
+      - /remote_joy_bridge.py
+      - --ros-args
+      - -p
+      - port:=${REMOTE_TELEOP_PORT:-9092}
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
   # ── diagnostics ───────────────────────────────────────────────────────────
   # Runs diagnostic_aggregator to collect and republish /diagnostics messages.
   diagnostics:
