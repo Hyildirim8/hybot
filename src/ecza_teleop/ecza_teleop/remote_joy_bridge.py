@@ -87,6 +87,15 @@ class RemoteJoyBridge(Node):
 
         srv.close()
 
+    # 1.0 -> 2.5: a brief PC-side stall (rviz viewer + video window + joystick
+    # sender all competing for the same PC's CPU/Wi-Fi) was enough to blow
+    # past 1s with zero data, tripping a full disconnect (and the zero-Joy
+    # publish that goes with it) for what was only a transient hiccup, not
+    # an actual dead link. 2.5s is still a safe upper bound on how long a
+    # genuinely lost connection can drive the robot on a stale command
+    # before failing safe.
+    _WATCHDOG_TIMEOUT_S = 2.5
+
     def _handle_client(self, conn: socket.socket) -> None:
         conn.settimeout(1.0)
         buf = b''
@@ -95,9 +104,10 @@ class RemoteJoyBridge(Node):
             try:
                 chunk = conn.recv(4096)
             except socket.timeout:
-                # No data for 1s — treat as a dead link, not just a quiet stick.
-                if time.monotonic() - last_msg_time > 1.0:
-                    raise ConnectionResetError('no data for 1s (watchdog)')
+                # No data for a while — treat as a dead link, not just a quiet stick.
+                if time.monotonic() - last_msg_time > self._WATCHDOG_TIMEOUT_S:
+                    raise ConnectionResetError(
+                        f'no data for {self._WATCHDOG_TIMEOUT_S}s (watchdog)')
                 continue
             if not chunk:
                 raise ConnectionResetError('remote end closed the socket')

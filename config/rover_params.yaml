@@ -138,7 +138,10 @@
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
     # Two distinct watchdogs — do not conflate them.
-    joy_watchdog_timeout_ms: 500        # ms — avoids false zeroing from brief /joy jitter
+    # 500 -> 1000: remote joystick over Wi-Fi hit normal network jitter well
+    # under 1s that the local wired joystick never would, tripping false
+    # zeroing/"kilitlenme" during teleop. 1000ms still fails safe quickly.
+    joy_watchdog_timeout_ms: 1000       # ms — avoids false zeroing from brief /joy jitter
     firmware_watchdog_timeout_ms: 500   # ms — ESP32 stops motors on /wheel_velocities silence
                                         # (informational here; firmware reads from NVS)
 
