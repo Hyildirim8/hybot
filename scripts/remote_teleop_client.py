@@ -11,10 +11,15 @@ Requirements (install once):
     pip3 install pygame opencv-python numpy
 
 Usage:
-    python3 remote_teleop_client.py <rpi-ip> [--joy-port 9092] [--cam-port 8081]
+    python3 remote_teleop_client.py <rpi-ip> [--joy-port 9092] \
+        [--cam-host <camera-ip>] [--cam-port 8081]
 
 Example:
     python3 remote_teleop_client.py 10.42.101.197
+
+    # camera streamed from a separate device (e.g. a Raspberry Pi Zero)
+    # instead of the RPi5 itself — joystick control still goes to the RPi5:
+    python3 remote_teleop_client.py 10.42.101.197 --cam-host 10.42.101.xxx
 
 Controls: identical to the Pi's local F710 mapping (see rover_params.yaml)
 — left stick = strafe/forward, right stick = rotate, LT/RT = side pivot,
@@ -376,6 +381,11 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('rpi_ip', help="RPi5's IP address (e.g. 10.42.101.197)")
     ap.add_argument('--joy-port', type=int, default=9092, help='remote_teleop TCP port (default 9092)')
+    ap.add_argument('--cam-host', default=None,
+                     help="camera source IP — set this if the camera is streamed from a "
+                          "SEPARATE device (e.g. a Raspberry Pi Zero) instead of the RPi5 "
+                          "itself. Defaults to rpi_ip (camera on the same machine as the "
+                          "joystick bridge) when not given.")
     ap.add_argument('--cam-port', type=int, default=8081, help='camera HTTP port (default 8081)')
     ap.add_argument('--debug', action='store_true',
                      help='print axes/buttons once per second as they are sent')
@@ -429,8 +439,12 @@ def main() -> None:
     def status():
         return 'joystick: connected' if sender.connected else 'joystick: reconnecting...'
 
+    cam_host = args.cam_host or args.rpi_ip
+    if args.cam_host:
+        print(f'[video] kamera kaynağı: {cam_host}:{args.cam_port} (rpi_ip\'den ayrı)')
+
     try:
-        _video_loop(args.rpi_ip, args.cam_port, status)
+        _video_loop(cam_host, args.cam_port, status)
     except KeyboardInterrupt:
         pass
     finally:
