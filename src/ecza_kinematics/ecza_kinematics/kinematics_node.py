@@ -13,18 +13,21 @@ Mecanum inverse kinematics:
     FL and RR: rollers at +45° (top-left to bottom-right diagonal)
     FR and RL: rollers at -45° (top-right to bottom-left diagonal)
 
-  Physical wheel spin directions (vy sign convention: vy<0=strafe left, vy>0=strafe right):
+  Physical wheel spin directions (vy sign convention: REP 103 / ROS Twist —
+  vy>0=left, vy<0=right — matches ros2_controllers' mecanum_drive_controller):
     Forward  (vx>0):        FL+ FR+ RL+ RR+
-    Strafe L (vy<0):        FL- FR+ RL+ RR-
-    Strafe R (vy>0):        FL+ FR- RL- RR+
+    Strafe L (vy>0):        FL- FR+ RL+ RR-
+    Strafe R (vy<0):        FL+ FR- RL- RR+
     CCW rot  (wz>0):        FL- FR+ RL- RR+
     CW  rot  (wz<0):        FL+ FR- RL+ RR-
 
-  Equations:
-    ω_FL = (1/r) * ( vx + vy - (lx+ly)*wz)
-    ω_FR = (1/r) * ( vx - vy + (lx+ly)*wz)
-    ω_RL = (1/r) * ( vx - vy - (lx+ly)*wz)
-    ω_RR = (1/r) * ( vx + vy + (lx+ly)*wz)
+  Equations (must match mecanum_drive_controller.cpp's FRONT_LEFT/FRONT_RIGHT/
+  REAR_LEFT/REAR_RIGHT formulas exactly, since that's the node actually driving
+  the rover — this node is a visualization/reference-only path):
+    ω_FL = (1/r) * ( vx - vy - (lx+ly)*wz)
+    ω_FR = (1/r) * ( vx + vy + (lx+ly)*wz)
+    ω_RL = (1/r) * ( vx + vy - (lx+ly)*wz)
+    ω_RR = (1/r) * ( vx - vy + (lx+ly)*wz)
 
   where:
     r   = wheel_radius (m)
@@ -104,15 +107,15 @@ class MecanumKinematicsNode(Node):
         k = self._lx + self._ly  # combined half-wheelbase factor
 
         # Inverse kinematics — rad/s for each wheel
-        # vy convention: vy < 0 = strafe left, vy > 0 = strafe right
-        #   Strafe Left  (vy<0): FL- FR+ RL+ RR-
-        #   Strafe Right (vy>0): FL+ FR- RL- RR+
+        # vy convention: REP 103 / ROS Twist — vy > 0 = strafe left, vy < 0 = strafe right
+        #   Strafe Left  (vy>0): FL- FR+ RL+ RR-
+        #   Strafe Right (vy<0): FL+ FR- RL- RR+
         # Keep these signs aligned with the hardware path:
         # mecanum_drive_controller -> wheel_bridge -> ESP32 -> /wheel_velocities.
-        fl = ( vx + vy - k * wz) / r
-        fr = ( vx - vy + k * wz) / r
-        rl = ( vx - vy - k * wz) / r
-        rr = ( vx + vy + k * wz) / r
+        fl = ( vx - vy - k * wz) / r
+        fr = ( vx + vy + k * wz) / r
+        rl = ( vx + vy - k * wz) / r
+        rr = ( vx - vy + k * wz) / r
 
         self._last_wheel_vel = [fl, fr, rl, rr]
 

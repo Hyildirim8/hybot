@@ -15,6 +15,11 @@ slam_toolbox:
     ceres_loss_function: None
 
     # Frames
+    # publish_odom_tf is not a real slam_toolbox param on the Humble branch
+    # (verified against source: SlamToolbox::publishTransformLoop only ever
+    # sends map->odom, unconditionally — there's no odom->base_link publish
+    # path to toggle on this distro). robot_localization (EKF, see
+    # config/ekf.yaml) safely owns odom->base_link with no possible conflict.
     odom_frame: odom
     map_frame: map
     base_frame: base_link     # controller publishes odom→base_link on /tf

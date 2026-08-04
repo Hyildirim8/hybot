@@ -10,15 +10,28 @@ Type=simple
 User=master
 Group=docker
 WorkingDirectory=/home/master/Workspace/ecza-robotu
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/master/.Xauthority
 
 # Run foreground (no -d) so systemd tracks the process.
 # docker-compose.yaml has restart:unless-stopped on all services — Docker itself
 # keeps containers alive; systemd keeps this supervisor process alive.
-# --rviz starts the RViz2 visualiser alongside the rover stack.
-ExecStart=/bin/bash /home/master/Workspace/ecza-robotu/scripts/launch.sh --rviz
+# --nav starts lidar + Nav2/SLAM + EKF (encoder+IMU) + slam_manager.
+#
+# rviz is deliberately NOT started here. Its Xvfb+llvmpipe software
+# rendering runs at ~70% of a core continuously; combined with the nav
+# stack always-on, live measurement on this 4-core Pi showed load average
+# ~30 and ros2_control unable to get RT scheduling ("Operation not
+# permitted") — the 50Hz wheel control loop was fully exposed to that
+# starvation, which plausibly contributed to erratic in-place rotation.
+# Start rviz on demand only, when actively debugging/watching via VNC:
+#   bash scripts/launch.sh --rviz
+# (this adds the rviz container to the already-running --nav stack; no
+# need to restart this service first).
+ExecStart=/bin/bash /home/master/Workspace/ecza-robotu/scripts/launch.sh --nav
 ExecStop=/usr/bin/docker compose \
     -f /home/master/Workspace/ecza-robotu/docker-compose.yaml \
-    --profile rviz \
+    --profile nav --profile rviz \
     down
 
 # If the supervisor exits unexpectedly, wait 10s then restart
