@@ -70,3 +70,16 @@ mecanum_drive_controller:
 
     # ── cmd_vel timeout ───────────────────────────────────────────────────────
     reference_timeout: 0.5     # seconds — stop if no cmd_vel received
+
+    # ── Odometry covariance ───────────────────────────────────────────────────
+    # Defaults to a flat [0.1]*6 for every axis, which tells the EKF (ekf.yaml)
+    # to trust x (forward, driven directly by wheel rotation) and y (lateral,
+    # only possible via mecanum roller slip) equally. That's physically wrong —
+    # lateral motion is inherently less certain — so the EKF was weighting
+    # slip-prone y/vy as trustworthy as x/vx. [z, roll, pitch, yaw] are left
+    # high on purpose: this is a 2D robot and the EKF already excludes them
+    # entirely (odom0_config yaw = false, see ekf.yaml note on hand-turn
+    # snap-back), so those four values are unused — kept high just to mark
+    # them "don't trust" for any other consumer that reads /odom directly.
+    pose_covariance_diagonal:  [0.01, 0.05, 1.0, 1.0, 1.0, 1.0]
+    twist_covariance_diagonal: [0.01, 0.05, 1.0, 1.0, 1.0, 1.0]
