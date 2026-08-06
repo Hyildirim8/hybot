@@ -124,6 +124,19 @@ services:
   # joint_state_broadcaster via topic_based_ros2_control hardware interface.
   robot_description:
     <<: *ros-service
+    # controller_manager's 50Hz control loop asks for FIFO RT scheduling
+    # (priority 50) and was silently falling back to normal scheduling —
+    # "Could not enable FIFO RT scheduling policy: Operation not permitted"
+    # in every startup log — because the container had neither the
+    # capability to raise its scheduling class nor an rtprio ulimit. Under
+    # load (Nav2 + costmap + planner all active) that let the control loop's
+    # timing jitter, plausibly behind erratic in-place rotation / drift
+    # during autonomous driving. cap_add + ulimits grant exactly what
+    # ros2_control's own docs ask for (see the warning's own link).
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
@@ -246,7 +259,10 @@ services:
   # View at http://<rpi-ip>:8081/ or rqt_image_view — deliberately NOT added
   # as an rviz Image display (segfaults rviz2 under this container's
   # Xvfb+llvmpipe setup even when disabled; see rover.rviz's Map display
-  # comment).
+  # comment). scripts/remote_teleop_client.py instead pulls chunked-JPEG
+  # frames over UDP on CSI_CAM_UDP_PORT — more stable than HTTP/TCP over a
+  # flaky WiFi link back to the operator's PC (a lost chunk drops one frame
+  # instead of stalling the stream on a TCP retransmit).
   csi_camera:
     <<: *ros-service
     volumes:
@@ -264,7 +280,8 @@ services:
           -p host:=127.0.0.1 \
           -p port:=${CSI_CAM_PORT:-8090} \
           -p frame_id:=csi_camera_link \
-          -p http_port:=8081
+          -p http_port:=8081 \
+          -p udp_port:=${CSI_CAM_UDP_PORT:-8082}
     restart: unless-stopped
     depends_on:
       - robot_description
