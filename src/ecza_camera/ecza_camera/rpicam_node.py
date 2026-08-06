@@ -17,14 +17,24 @@ Publishes:
 
 Also serves an MJPEG stream over plain HTTP (no ROS2 client needed), same
 latest-frame-signaled design as esp32cam_node.py — this is the intended way
-to view this feed. Do NOT add an rviz_default_plugins/Image display to
-rover.rviz for this: that reliably segfaults rviz2 under this container's
-Xvfb+llvmpipe setup even when Enabled: false (see rover.rviz's Map display
-comment / memory rviz-crash-loop-image-display). Use rqt_image_view from a
-networked machine, or open http://<rpi-ip>:<http_port>/ in a browser.
+to view this feed from a browser or rqt_image_view. Do NOT add an
+rviz_default_plugins/Image display to rover.rviz for this: that reliably
+segfaults rviz2 under this container's Xvfb+llvmpipe setup even when
+Enabled: false (see rover.rviz's Map display comment / memory
+rviz-crash-loop-image-display). Use rqt_image_view from a networked
+machine, or open http://<rpi-ip>:<http_port>/ in a browser.
+
+Additionally pushes frames over plain UDP (chunked JPEG, see
+scripts/remote_teleop_client.py) for remote_teleop_client.py's video view —
+unlike the HTTP/TCP path, a lost UDP chunk just drops that one frame instead
+of stalling the whole stream waiting for a TCP retransmit, which matters
+over a flaky WiFi link back to the operator's PC. Any client that sends a
+datagram to udp_port is registered as a subscriber for SUBSCRIBER_TTL
+seconds (renew by sending another datagram / keep-alive).
 """
 
 import socket
+import struct
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,6 +48,15 @@ from std_msgs.msg import Header
 SOI = b'\xff\xd8'
 EOI = b'\xff\xd9'
 MAX_FRAME = 2_000_000
+
+# UDP frame chunking: header is (frame_seq: u32, chunk_idx: u16, total_chunks:
+# u16) followed by up to UDP_CHUNK_SIZE bytes of raw JPEG data. 1400 bytes
+# keeps header+chunk+IP/UDP overhead under the standard 1500-byte Ethernet
+# MTU so each chunk is one physical packet — a chunk lost to WiFi noise
+# drops only that one video frame, not a whole IP fragment group.
+UDP_HEADER = struct.Struct('!IHH')
+UDP_CHUNK_SIZE = 1400
+SUBSCRIBER_TTL = 5.0
 
 # Shared between the reader thread (writer) and HTTP server threads
 # (readers) — module-level so MJPEGHandler (instantiated per-request by
@@ -92,13 +111,26 @@ class RpicamNode(Node):
         self.declare_parameter('port', 8090)
         self.declare_parameter('frame_id', 'csi_camera_link')
         self.declare_parameter('http_port', 8081)
+        self.declare_parameter('udp_port', 8082)
         self.declare_parameter('reconnect_delay_s', 1.0)
 
         self._host = self.get_parameter('host').value
         self._port = int(self.get_parameter('port').value)
         self._frame_id = self.get_parameter('frame_id').value
         self._http_port = int(self.get_parameter('http_port').value)
+        self._udp_port = int(self.get_parameter('udp_port').value)
         self._reconnect_delay = float(self.get_parameter('reconnect_delay_s').value)
+
+        # Subscriber registry for the UDP push path: addr -> last-seen time.
+        # Populated by _udp_listen_loop (any inbound datagram = hello/keep-
+        # alive), consumed by _send_udp_frame (prune stale, fan out fresh).
+        self._udp_subscribers = {}
+        self._udp_subscribers_lock = threading.Lock()
+        self._udp_frame_seq = 0
+        self._udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._udp_socket.bind(('0.0.0.0', self._udp_port))
+        threading.Thread(target=self._udp_listen_loop, daemon=True).start()
+        self.get_logger().info(f'UDP video push: listening for subscribers on :{self._udp_port}')
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -145,6 +177,44 @@ class RpicamNode(Node):
                     f'{self._reconnect_delay:.1f}s', throttle_duration_sec=5.0,
                 )
             time.sleep(self._reconnect_delay)
+
+    def _udp_listen_loop(self) -> None:
+        # Any datagram from a client — the content is never read, just the
+        # sender address — registers/renews that address as a subscriber.
+        while self._running:
+            try:
+                _, addr = self._udp_socket.recvfrom(64)
+            except OSError:
+                if self._running:
+                    self.get_logger().warn('UDP subscriber socket error', throttle_duration_sec=5.0)
+                continue
+            with self._udp_subscribers_lock:
+                is_new = addr not in self._udp_subscribers
+                self._udp_subscribers[addr] = time.monotonic()
+            if is_new:
+                self.get_logger().info(f'UDP video subscriber registered: {addr[0]}:{addr[1]}')
+
+    def _send_udp_frame(self, frame: bytes) -> None:
+        now = time.monotonic()
+        with self._udp_subscribers_lock:
+            stale = [a for a, t in self._udp_subscribers.items() if now - t > SUBSCRIBER_TTL]
+            for a in stale:
+                del self._udp_subscribers[a]
+            targets = list(self._udp_subscribers.keys())
+        if not targets:
+            return
+
+        self._udp_frame_seq = (self._udp_frame_seq + 1) & 0xFFFFFFFF
+        seq = self._udp_frame_seq
+        total = (len(frame) + UDP_CHUNK_SIZE - 1) // UDP_CHUNK_SIZE
+        for idx in range(total):
+            chunk = frame[idx * UDP_CHUNK_SIZE:(idx + 1) * UDP_CHUNK_SIZE]
+            packet = UDP_HEADER.pack(seq, idx, total) + chunk
+            for addr in targets:
+                try:
+                    self._udp_socket.sendto(packet, addr)
+                except OSError:
+                    pass  # subscriber went away mid-frame — next TTL sweep drops it
 
     def _connect(self) -> socket.socket:
         sock = socket.create_connection((self._host, self._port), timeout=5.0)
@@ -195,6 +265,8 @@ class RpicamNode(Node):
             _frame_seq += 1
             _frame_cond.notify_all()
 
+        self._send_udp_frame(frame)
+
         self._stats["frames"] += 1
         self._stats["bytes"] += len(frame)
         self._report()
@@ -223,6 +295,7 @@ def main(args=None):
     finally:
         node._running = False
         node._http_server.shutdown()
+        node._udp_socket.close()
         node.destroy_node()
         rclpy.shutdown()
 

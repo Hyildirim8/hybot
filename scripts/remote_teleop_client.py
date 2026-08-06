@@ -10,9 +10,17 @@ additive control path (see docker-compose.yaml `remote_teleop` service).
 Requirements (install once):
     pip3 install pygame opencv-python numpy
 
+Video transport: UDP, not HTTP — this script sends a small "hello" datagram
+to the Pi's rpicam_node.py every second to (re)register as a subscriber,
+which then pushes chunked-JPEG frames back over UDP. A dropped/late chunk
+just costs one video frame instead of stalling the whole feed waiting on a
+TCP retransmit, which is what made the old HTTP MJPEG pull feel laggy over a
+flaky WiFi link. (The Pi's http://<rpi-ip>:8081/ MJPEG view still exists
+separately for browser/rqt_image_view use — this script no longer uses it.)
+
 Usage:
     python3 remote_teleop_client.py <rpi-ip> [--joy-port 9092] \
-        [--cam-host <camera-ip>] [--cam-port 8081]
+        [--cam-host <camera-ip>] [--cam-port 8082]
 
 Example:
     python3 remote_teleop_client.py 10.42.101.197
@@ -47,6 +55,7 @@ import argparse
 import json
 import os
 import socket
+import struct
 import sys
 import threading
 import time
@@ -54,9 +63,6 @@ import time
 import cv2
 import numpy as np
 import pygame
-
-SOI = b'\xff\xd8'
-EOI = b'\xff\xd9'
 
 MAPPING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              'remote_teleop_mapping.json')
@@ -308,73 +314,81 @@ class JoystickSender:
             time.sleep(self._period)
 
 
-def _read_mjpeg_frame(sock: socket.socket, buf: bytearray, max_frame: int = 2_000_000):
-    """Pulls one JPEG frame out of an MJPEG multipart HTTP stream (blocking)."""
-    while True:
-        if not buf.startswith(SOI):
-            idx = buf.find(SOI)
-            if idx < 0:
-                if len(buf) > max_frame:
-                    del buf[:-2]
-                chunk = sock.recv(65536)
-                if not chunk:
-                    raise ConnectionResetError('camera stream closed')
-                buf.extend(chunk)
-                continue
-            del buf[:idx]
+# Must match rpicam_node.py's UDP_HEADER / UDP_CHUNK_SIZE exactly — this is
+# the wire format for the chunked-JPEG-over-UDP video push, not negotiated.
+UDP_HEADER = struct.Struct('!IHH')
+UDP_HELLO_INTERVAL = 1.0   # re-sent to renew this client's subscription
+STREAM_STALL_S = 2.0       # no frame in this long -> show "unavailable"
 
-        end = buf.find(EOI, 2)
-        if end < 0:
-            if len(buf) > max_frame:
-                buf.clear()
-            chunk = sock.recv(65536)
-            if not chunk:
-                raise ConnectionResetError('camera stream closed')
-            buf.extend(chunk)
-            continue
 
-        frame = bytes(buf[:end + 2])
-        del buf[:end + 2]
-        return frame
+def _hello_loop(sock: socket.socket, addr, running_fn) -> None:
+    # rpicam_node.py registers/renews a subscriber on ANY inbound datagram —
+    # content doesn't matter, only that one arrives before SUBSCRIBER_TTL
+    # (5s) expires.
+    while running_fn():
+        try:
+            sock.sendto(b'hello', addr)
+        except OSError:
+            pass
+        time.sleep(UDP_HELLO_INTERVAL)
 
 
 def _video_loop(host: str, port: int, status_fn) -> None:
     window = 'ecza-robotu — remote teleop (ESC to quit)'
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
-    while True:
-        try:
-            sock = socket.create_connection((host, port), timeout=5.0)
-            sock.sendall(
-                f'GET /stream HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n'.encode()
-            )
-            # Drop the HTTP header before the first MJPEG boundary/frame.
-            buf = bytearray()
-            while SOI not in buf:
-                chunk = sock.recv(65536)
-                if not chunk:
-                    raise ConnectionResetError('camera stream closed before first frame')
-                buf.extend(chunk)
-            print(f'[video] connected to {host}:{port}')
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(0.5)
+    running = True
+    threading.Thread(target=_hello_loop, args=(sock, (host, port), lambda: running),
+                      daemon=True).start()
+    print(f'[video] subscribing to udp://{host}:{port}')
 
-            while True:
-                jpg = _read_mjpeg_frame(sock, buf)
-                arr = np.frombuffer(jpg, dtype=np.uint8)
-                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                if frame is not None:
-                    cv2.putText(frame, status_fn(), (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
-                                0.7, (0, 255, 0), 2, cv2.LINE_AA)
-                    cv2.imshow(window, frame)
-                if cv2.waitKey(1) & 0xFF == 27:  # ESC
-                    return
-        except (ConnectionRefusedError, OSError, socket.timeout, ConnectionResetError) as e:
-            print(f'[video] camera link unavailable ({e}); retrying in 2s...')
-            blank = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(blank, 'camera unavailable, retrying...', (20, 240),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
-            cv2.imshow(window, blank)
-            if cv2.waitKey(2000) & 0xFF == 27:
+    # Chunks for the frame currently being assembled: chunk_idx -> bytes.
+    # UDP arrives unordered/lossy, so a frame is only ever the most recent
+    # one seen — an older, still-incomplete frame_seq is abandoned outright
+    # the moment a newer one's first chunk shows up (real-time, not archival).
+    cur_seq = None
+    cur_total = 0
+    cur_chunks = {}
+    last_frame_t = 0.0
+
+    try:
+        while True:
+            try:
+                packet, _ = sock.recvfrom(65536)
+            except socket.timeout:
+                packet = None
+
+            if packet is not None and len(packet) >= UDP_HEADER.size:
+                seq, idx, total = UDP_HEADER.unpack_from(packet)
+                data = packet[UDP_HEADER.size:]
+                if seq != cur_seq:
+                    cur_seq, cur_total, cur_chunks = seq, total, {}
+                cur_chunks[idx] = data
+
+                if len(cur_chunks) == cur_total:
+                    jpg = b''.join(cur_chunks[i] for i in range(cur_total))
+                    cur_seq = None
+                    arr = np.frombuffer(jpg, dtype=np.uint8)
+                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        last_frame_t = time.monotonic()
+                        cv2.putText(frame, status_fn(), (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                        cv2.imshow(window, frame)
+
+            if time.monotonic() - last_frame_t > STREAM_STALL_S:
+                blank = np.zeros((480, 640, 3), dtype=np.uint8)
+                cv2.putText(blank, 'camera unavailable, retrying...', (20, 240),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+                cv2.imshow(window, blank)
+
+            if cv2.waitKey(1) & 0xFF == 27:  # ESC
                 return
+    finally:
+        running = False
+        sock.close()
 
 
 def main() -> None:
@@ -386,7 +400,7 @@ def main() -> None:
                           "SEPARATE device (e.g. a Raspberry Pi Zero) instead of the RPi5 "
                           "itself. Defaults to rpi_ip (camera on the same machine as the "
                           "joystick bridge) when not given.")
-    ap.add_argument('--cam-port', type=int, default=8081, help='camera HTTP port (default 8081)')
+    ap.add_argument('--cam-port', type=int, default=8082, help='camera UDP port (default 8082)')
     ap.add_argument('--debug', action='store_true',
                      help='print axes/buttons once per second as they are sent')
     ap.add_argument('--calibrate', action='store_true',
