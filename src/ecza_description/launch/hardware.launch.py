@@ -86,10 +86,27 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # ── Spawn joint_state_broadcaster (immediate) ─────────────────────────
+    # controller-manager-timeout raised from the 10s default: on the Pi,
+    # ros2_control_node's first load_controller call can take >10s while
+    # resource_manager/RT-thread setup is still competing for CPU with the
+    # other containers restarting at the same time. With the 10s default the
+    # spawner CLI times out and fires a second load_controller call while the
+    # first is still in flight; controller_manager then rejects the second
+    # call as "already loaded" and the spawner exits fatally, leaving the
+    # controller stuck in 'unconfigured' forever (nothing else activates it).
+    # No respawn here: spawner is a one-shot load+configure+activate utility
+    # that exits 0 on success. respawn=True was tried and made it worse — it
+    # relaunched spawner after every clean exit too, and the second run tried
+    # to configure an already-active controller, which ros2_control rejects,
+    # so it crash-looped forever instead of just running once.
     spawn_jsb = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+        arguments=[
+            "joint_state_broadcaster",
+            "--controller-manager", "/controller_manager",
+            "--controller-manager-timeout", "60",
+        ],
         output="screen",
     )
 
@@ -111,6 +128,7 @@ def generate_launch_description() -> LaunchDescription:
             arguments=[
                 "mecanum_drive_controller",
                 "--controller-manager", "/controller_manager",
+                "--controller-manager-timeout", "60",
             ],
             output="screen",
         )],
