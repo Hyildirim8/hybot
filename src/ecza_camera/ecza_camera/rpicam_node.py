@@ -121,6 +121,10 @@ class RpicamNode(Node):
         self._udp_port = int(self.get_parameter('udp_port').value)
         self._reconnect_delay = float(self.get_parameter('reconnect_delay_s').value)
 
+        # Set before any thread starts — _udp_listen_loop and _connect_loop
+        # both read this on their very first iteration.
+        self._running = True
+
         # Subscriber registry for the UDP push path: addr -> last-seen time.
         # Populated by _udp_listen_loop (any inbound datagram = hello/keep-
         # alive), consumed by _send_udp_frame (prune stale, fan out fresh).
@@ -158,7 +162,6 @@ class RpicamNode(Node):
         # and exits when that client disconnects (scripts/csi_cam_stream.sh
         # respawns it) — so this loop expects to reconnect periodically, not
         # just once at startup.
-        self._running = True
         self._reader_thread = threading.Thread(target=self._connect_loop, daemon=True)
         self._reader_thread.start()
 

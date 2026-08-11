@@ -82,6 +82,11 @@ def generate_launch_description() -> LaunchDescription:
             # Remap odometry topic so Nav2, SLAM Toolbox and other nodes
             # that subscribe to the standard /odom topic receive it.
             ("/controller_manager/odometry", "/odom"),
+            # Remap mecanum_drive_controller's reference_unstamped subscription
+            # to /cmd_vel so teleop_node's Twist commands actually reach it.
+            # Without this, teleop only ever talks to an unconnected topic and
+            # the wheels never move (reference_velocity stays zero).
+            ("/controller_manager/reference_unstamped", "/cmd_vel"),
         ],
     )
 

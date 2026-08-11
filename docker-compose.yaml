@@ -29,6 +29,12 @@ x-ros-service: &ros-service
   environment:
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
     FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+    # Restricts DDS discovery to localhost so a foreign device on the LAN
+    # can't be seen on domain 0 (was causing a duplicate /robot_state_publisher
+    # that broke RViz's RobotModel display, 2026-08-11). Unlike an
+    # interfaceWhiteList this doesn't touch the transport/socket layer, so it
+    # can't affect the ESP32 bridge's own discovery the way ROS_DOMAIN_ID does.
+    ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
 
 x-config-mount: &config-mount
   - ./config/rover_params.yaml:/config/rover_params.yaml:ro
@@ -107,6 +113,7 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
     volumes:
       - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
       - /dev:/dev
@@ -151,15 +158,18 @@ services:
       - teleop
 
   # ── rviz ──────────────────────────────────────────────────────────────────
-  # Runs RViz2 inside the container, rendered via Wayland (labwc + wayvnc).
+  # Runs RViz2 on its own private Xvfb display (:99) and serves ONLY that
+  # display over VNC on port 5901. Nothing else is ever drawn on :99, so a
+  # viewer connecting to <pi-ip>:5901 sees the RViz window filling the frame —
+  # no desktop, no taskbar, no other windows. The Pi's own desktop stays on
+  # its separate WayVNC port, untouched by this container.
+  #
+  #   RViz only .......... <pi-ip>:5901   (this container)
+  #   Full Pi desktop .... <pi-ip>:5900   (host WayVNC)
   #
   # Activated by the 'rviz' profile:
   #   bash scripts/launch.sh --rviz
   #   bash scripts/rviz.sh --docker          (standalone, no other services)
-  #
-  # Display: Wayland-native via the host's /run/user/1000/wayland-0 socket.
-  # The socket path is hardcoded for UID 1000 (the 'master' user on this RPi).
-  # XWayland (:0) is also mounted as a fallback.
   #
   # The command waits 8 s before launching so robot_state_publisher has time
   # to advertise /robot_description before RViz tries to subscribe to it.
@@ -170,6 +180,7 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       DISPLAY: ":99"
       LIBGL_ALWAYS_SOFTWARE: "1"
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
@@ -188,9 +199,8 @@ services:
         rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
         echo "[rviz] starting Xvfb on :99..."
         Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -nolisten tcp &
-        XVFB_PID=$!
         sleep 2
-        echo "[rviz] starting x11vnc on port 5901 (no auth — LAN-only)..."
+        echo "[rviz] serving :99 on port 5901 (no auth — LAN-only)..."
         # -auth /dev/null: Xvfb was started with no -auth cookie file (no
         # access control needed for a container-local display), but x11vnc
         # otherwise tries to auto-locate one and errors out when it can't.
@@ -437,6 +447,7 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       # Override on the command line to switch modes:
       #   NAV_MODE=nav MAP=/maps/my_map.yaml docker compose --profile nav up -d --force-recreate navigation
       NAV_MODE: ${NAV_MODE:-slam}
