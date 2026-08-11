@@ -61,6 +61,14 @@
     pivot_wheel_speed_rad_s: 10.0  # aktif teker çifti hedef hızı; firmware MAX_SPEED_RAD_S=18.75'i satüre etmesin diye düşük tutuldu
     strafe_invert: false           # manuel strafe: hem manuel hem rvizde ters bildirildi, false'a geri alındı (2026-08-01)
     auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
+    # Index 9 IS Start on this pad. Do not "fix" it to 11 again: that was tried
+    # on 2026-08-11 because `jstest` prints the button list as
+    # A,B,C,X,Y,Z,TL,TR,TL2,TR2,Select,Start — but those are just the evdev
+    # keycodes joydev hands out in order, NOT the F710's physical layout. The
+    # F710 in DirectInput mode reports 0-3=face, 4=LB, 5=RB, 6=LT, 7=RT,
+    # 8=Back, 9=Start, 10=L3, 11=R3 — consistent with btn_pivot_left/right
+    # below being LT/RT at 6/7. Setting this to 11 binds mode toggle to the
+    # right stick click, so pressing Start does nothing at all.
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
     btn_auto_mode_alt: -1          # no alternate toggle
     btn_auto_mode_candidates: [9]  # only Start toggles TELEOP <-> AUTO

@@ -3,6 +3,24 @@
   fastdds_udp.xml
   Disables SHM transport, keeps builtin UDP transports for proper PDP discovery.
   Used by all ROS2 containers (network_mode: host).
+
+  DO NOT add an <interfaceWhiteList>127.0.0.1</interfaceWhiteList> here.
+  Tried twice (2026-08-11) to stop a foreign LAN device polluting domain 0,
+  and it silently kills the ESP32 motor bridge every time: `ip link show lo`
+  has NO MULTICAST flag on this Pi, so restricting Fast-DDS to loopback
+  disables multicast discovery. micro-ros-agent still establishes its serial
+  XRCE session and logs "participant created" / "datareader created", but its
+  DDS participant is never discovered by the rest of the graph —
+  /wheel_velocities_cmd_f32 ends up with 0 subscribers and
+  /wheel_velocities with 0 publishers, so joystick commands reach the
+  controller and then vanish. Symptom looks like "joystick dead", not "DDS
+  misconfigured". Bumping ROS_DOMAIN_ID breaks the same bridge a different
+  way (see .env). ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST is a no-op here —
+  it is an Iron+ feature, this stack is Humble (rmw_fastrtps_cpp 6.2.10).
+  If foreign-participant isolation is needed again, it has to preserve
+  intra-host discovery — e.g. unicast initialPeersList/metatraffic locators
+  rather than an interface whitelist — and must be verified by checking
+  `ros2 topic info /wheel_velocities_cmd_f32` shows 1 subscriber afterwards.
 -->
 <profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
   <transport_descriptors>
@@ -18,6 +36,22 @@
         <transport_id>shm_disabled</transport_id>
       </userTransports>
       <useBuiltinTransports>false</useBuiltinTransports>
+      <builtin>
+        <discovery_config>
+          <!-- Ignore DDS participants living on OTHER machines, while leaving
+               every same-host participant (all our containers AND the
+               micro-ros-agent's ESP32 bridge) fully discoverable. This is the
+               isolation that the interfaceWhiteList above must NOT be used for:
+               it filters at the discovery layer instead of the socket layer, so
+               multicast on real interfaces keeps working and the bridge lives.
+               Fixes a foreign robot on the LAN (vision_bot_urdf /
+               vision_arm_controller) that was publishing onto domain 0 and
+               racing us — RViz latched its URDF and rendered nothing but
+               "Package [vision_bot_urdf] does not exist" errors, and it added a
+               third publisher to /joy alongside joy_node + remote_joy_bridge. -->
+          <ignoreParticipantFlags>FILTER_DIFFERENT_HOST</ignoreParticipantFlags>
+        </discovery_config>
+      </builtin>
     </rtps>
   </participant>
 </profiles>

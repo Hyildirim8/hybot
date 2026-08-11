@@ -48,6 +48,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
+from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy, LaserScan
 from std_msgs.msg import Bool
@@ -80,6 +81,7 @@ class TeleopNode(Node):
         self.declare_parameter("mode_handoff_stop_s", 0.35)
         self.declare_parameter("nav_cmd_topic", "/cmd_vel_nav")
         self.declare_parameter("auto_enable_on_nav_cmd", True)
+        self.declare_parameter("auto_enable_reinstate_quiet_s", 3.0)
         self.declare_parameter("start_in_autonomous", True)
         self.declare_parameter("max_linear_speed", 0.5)
         self.declare_parameter("max_angular_speed", 1.0)
@@ -124,6 +126,9 @@ class TeleopNode(Node):
         self._nav_cmd_topic = self.get_parameter("nav_cmd_topic").value
         self._auto_enable_on_nav_cmd = bool(
             self.get_parameter("auto_enable_on_nav_cmd").value
+        )
+        self._auto_reinstate_quiet_s = float(
+            self.get_parameter("auto_enable_reinstate_quiet_s").value
         )
         self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
@@ -183,6 +188,14 @@ class TeleopNode(Node):
         self._autonomous = bool(self._start_in_autonomous)  # False = TELEOP, True = AUTO
         self._prev_auto_btn = False       # edge-detect across primary/alt buttons
         self._last_mode_toggle_time = 0.0
+        # Set when the operator explicitly leaves AUTO. Without it, a Nav2 goal
+        # that is still running keeps publishing motion, and _nav_cmd_cb's
+        # auto_enable_on_nav_cmd flips straight back to AUTO — so Start looks
+        # like it does nothing and the operator can never take over while a
+        # goal is active (observed live 2026-08-11: "Mode → TELEOP" followed
+        # ~1 s later by "Nav2 command received -> AUTONOMOUS", every time).
+        self._auto_enable_inhibited = False
+        self._last_nav_motion_time = 0.0
         self._handoff_stop_until = 0.0
         self._axes_ready = not self._reject_extreme_axis_startup
         self._front_blocked = False
@@ -223,6 +236,16 @@ class TeleopNode(Node):
         self._nav_sub = self.create_subscription(
             Twist, self._nav_cmd_topic, self._nav_cmd_cb, reliable_qos
         )
+        # Cancel-goal service clients (see _cancel_nav_goals). These are the
+        # action servers' own cancel services, so goals started from RViz —
+        # which this node never gets a handle for — can still be dropped.
+        self._nav_cancel_clients = [
+            self.create_client(CancelGoal, "/navigate_to_pose/_action/cancel_goal"),
+            self.create_client(
+                CancelGoal, "/navigate_through_poses/_action/cancel_goal"
+            ),
+        ]
+
         self._scan_sub = None
         if self._enable_scan_safety:
             self._scan_sub = self.create_subscription(
@@ -290,6 +313,20 @@ class TeleopNode(Node):
             if idx >= 0 and idx not in indices:
                 indices.append(idx)
         return indices
+
+    def _cancel_nav_goals(self) -> None:
+        """Ask Nav2 to drop whatever goal is running.
+
+        An all-zero goal_info means "cancel every accepted goal" per the
+        action_msgs/CancelGoal contract. Fire-and-forget: this runs inside the
+        joy callback, so it must not block waiting for a reply, and there is
+        nothing useful to do with the result either way.
+        """
+        request = CancelGoal.Request()
+        for client in self._nav_cancel_clients:
+            if not client.service_is_ready():
+                continue
+            client.call_async(request)
 
     def _apply_deadzone(self, value: float) -> float:
         if abs(value) < self._deadzone:
@@ -421,6 +458,16 @@ class TeleopNode(Node):
             self._autonomous = not self._autonomous
             self._last_mode_toggle_time = now_s
             self._handoff_stop_until = now_s + max(0.0, self._mode_handoff_stop_s)
+            if self._autonomous:
+                # Operator handed control back on purpose — let Nav2 drive.
+                self._auto_enable_inhibited = False
+            else:
+                # Operator takeover: block auto re-entry and tell Nav2 to drop
+                # the running goal, otherwise it keeps replanning against a
+                # target the operator has already overridden.
+                self._auto_enable_inhibited = True
+                self._last_nav_motion_time = now_s
+                self._cancel_nav_goals()
             self._publish_mode()
             # Always stop the robot on any transition so neither Nav2 nor
             # the joystick leaves the wheels spinning during the handoff.
@@ -535,9 +582,13 @@ class TeleopNode(Node):
         self._publish_cmd(self._apply_scan_safety(twist))
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
+        if self._twist_has_motion(msg):
+            self._last_nav_motion_time = time.monotonic()
+
         if (
             self._auto_enable_on_nav_cmd
             and not self._autonomous
+            and not self._auto_enable_inhibited
             and self._twist_has_motion(msg)
         ):
             self._autonomous = True
@@ -565,6 +616,18 @@ class TeleopNode(Node):
         )
 
     def _watchdog_cb(self) -> None:
+        # Lift the operator-takeover inhibit once Nav2 has actually gone quiet
+        # (goal cancelled or finished). A later goal can then auto-engage AUTO
+        # again as usual — the inhibit only has to outlive the goal that was
+        # running when the operator took over.
+        if self._auto_enable_inhibited and not self._autonomous:
+            quiet_for = time.monotonic() - self._last_nav_motion_time
+            if quiet_for >= self._auto_reinstate_quiet_s:
+                self._auto_enable_inhibited = False
+                self.get_logger().info(
+                    "Nav2 sustu — yeni hedefle otomatik AUTO geçişi tekrar aktif"
+                )
+
         # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the
         # joy watchdog must not inject zero commands.
         if self._autonomous:
