@@ -64,12 +64,16 @@ def generate_launch_description() -> LaunchDescription:
             "max_publish_hz": 8.0,
             "angle_downsample": 2,
             "slam_publish_hz": 2.5,
-            # 4 -> 2: lidar zaten tarama başına ~720 binin sadece ~%11'inde
-            # geçerli ölçüm döndürüyor (~79 nokta). Bunun 4'te 3'ünü de atınca
-            # slam_toolbox'a giden taramaların çoğu tamamen boş kalıyordu;
-            # Karto boş taramayı reddettiği için pose graph'a hiç düğüm
-            # eklenmiyor ve /map 0x0 olarak yayınlanıyordu.
-            "slam_angle_downsample": 2,
+            # 4 -> 2 -> 1. Downsampling is plain stride slicing
+            # (ranges[::n] in scan_restamper), so it throws away that
+            # fraction of the *valid* points too, and this lidar has none to
+            # spare. Measured 2026-08-11: it spins at 12.7 Hz, not the 10 Hz
+            # it reports, so at 4 kHz there are only ~315 samples for the 720
+            # angle_compensate bins, and only ~100 of those come back with a
+            # real return (~14% of the scan). Halving that again left SLAM
+            # matching against ~50 points per scan, which is why the map
+            # smeared into a radial fan instead of closing loops.
+            "slam_angle_downsample": 1,
             # 0.07 -> 0.65: bu kadar düşük bir eşik robot ~4°/sn'den hızlı
             # döndüğü an SLAM'a scan gitmesini tamamen kesiyordu — dönüş
             # boyunca SLAM kör kalıyor, sadece dead-reckoning ile ilerliyor,
@@ -78,6 +82,13 @@ def generate_launch_description() -> LaunchDescription:
             # çalışan değer.
             "max_slam_angular_z": 0.65,
             "odom_topic": "/odom",
+            # Whole rotations carry 150-400 valid points, fragments carry
+            # 0-25, and almost nothing lands in between — so 80 cleanly
+            # separates them with room to spare on both sides. About 38% of
+            # incoming scans pass, which is still ~5-6 whole scans/s, well
+            # above the 2.5 Hz SLAM path and 8 Hz costmap path below.
+            "min_valid_points": 80,
+            "slam_min_valid_points": 80,
         }],
     )
 
