@@ -38,7 +38,11 @@ x-ros-service: &ros-service
 
 x-config-mount: &config-mount
   - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-  - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+  # DDS_PROFILE swaps which profile file lands at the fixed in-container path,
+  # so FASTRTPS_DEFAULT_PROFILES_FILE never has to change. Default is the
+  # isolated profile; set DDS_PROFILE=fastdds_lan.xml (or pass --lan to
+  # scripts/launch.sh) when the PC-side RViz viewer needs to reach the robot.
+  - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
   - ./config/controllers.yaml:/config/controllers.yaml:ro
 
 # ---------------------------------------------------------------------------
@@ -56,7 +60,7 @@ services:
     privileged: true                    # needed for /dev/input/* access
     volumes:
       - /dev/input:/dev/input           # joystick device hot-plug
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
     command:
       - bash
       - -c
@@ -87,7 +91,7 @@ services:
     <<: *ros-service
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_teleop/ecza_teleop/teleop_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/teleop_node.py:ro
     command:
@@ -115,7 +119,7 @@ services:
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
       ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - /dev:/dev
     command: >
       serial --dev ${SERIAL_DEV:-/dev/ttyACM0} --baudrate 115200 --verbose 6
@@ -146,7 +150,7 @@ services:
       rtprio: 99
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
       - ./src/ecza_description/launch/hardware.launch.py:/ws/install/share/ecza_description/launch/hardware.launch.py:ro
@@ -186,7 +190,7 @@ services:
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
     volumes:
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
     command:
       - bash
@@ -198,13 +202,21 @@ services:
         # ("Server is already active for display 99"). Clean up first.
         rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
         echo "[rviz] starting Xvfb on :99..."
-        Xvfb :99 -screen 0 1920x1080x24 +extension GLX +render -nolisten tcp &
+        # 1280x720, not 1920x1080. There is no GPU on this display — Mesa
+        # falls back to llvmpipe, so every pixel is rendered on the CPU and
+        # then re-encoded by x11vnc. At 1080p rviz2 alone measured 120-142%
+        # CPU with a system load average of 10-15 on 4 cores, which starved
+        # the EKF ("Failed to meet update rate") and left rviz itself logging
+        # TF extrapolation errors. 720p is 44% of the pixels.
+        Xvfb :99 -screen 0 1280x720x24 +extension GLX +render -nolisten tcp &
         sleep 2
         echo "[rviz] serving :99 on port 5901 (no auth — LAN-only)..."
         # -auth /dev/null: Xvfb was started with no -auth cookie file (no
         # access control needed for a container-local display), but x11vnc
         # otherwise tries to auto-locate one and errors out when it can't.
-        x11vnc -display :99 -auth /dev/null -nopw -forever -shared -rfbport 5901 -bg -o /tmp/x11vnc.log -quiet
+        # -wait/-defer 50: poll and push at ~20 fps instead of x11vnc's default
+        # busy-polling; rviz only renders ~9 fps here anyway.
+        x11vnc -display :99 -auth /dev/null -nopw -forever -shared -rfbport 5901 -wait 50 -defer 50 -bg -o /tmp/x11vnc.log -quiet
         echo "[rviz] waiting 8 s for robot_state_publisher..."
         sleep 8
         # Crash-supervisor loop: only rviz2 restarts on crash, not the whole
@@ -237,7 +249,7 @@ services:
     user: root                               # /dev/i2c-1 requires root or i2c group
     privileged: true
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_imu/ecza_imu/imu_node.py:/imu_node.py:ro
     devices:
       - /dev/i2c-1:/dev/i2c-1
@@ -276,7 +288,7 @@ services:
   csi_camera:
     <<: *ros-service
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_camera/ecza_camera/rpicam_node.py:/rpicam_node.py:ro
     command:
       - bash
@@ -309,7 +321,7 @@ services:
   remote_teleop:
     <<: *ros-service
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_teleop/ecza_teleop/remote_joy_bridge.py:/remote_joy_bridge.py:ro
     command:
       - python3
@@ -356,7 +368,7 @@ services:
     profiles:
       - nav
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/ekf.yaml:/config/ekf.yaml:ro
     command:
       - ros2
@@ -383,7 +395,7 @@ services:
       - nav
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./maps:/maps:rw
       - ./src/ecza_teleop/ecza_teleop/slam_manager_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py:ro
@@ -410,7 +422,7 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_lidar/launch/lidar.launch.py:/ws/install/share/ecza_lidar/launch/lidar.launch.py:ro
       - ./src/ecza_lidar/scripts/scan_restamper.py:/ws/install/lib/ecza_lidar/scan_restamper.py:ro
     command: >
@@ -453,7 +465,7 @@ services:
       NAV_MODE: ${NAV_MODE:-slam}
       MAP: ${MAP:-}
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./maps:/maps:rw
       - ./docker/nav2_entrypoint.sh:/nav2_entrypoint.sh:ro
       # Bind-mount güncel config dosyaları — image rebuild gerektirmeden aktif olur

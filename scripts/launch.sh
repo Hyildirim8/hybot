@@ -7,8 +7,14 @@
 #   bash scripts/launch.sh --lidar                # base stack + RPLidar driver
 #   bash scripts/launch.sh --nav                  # base stack + lidar + Nav2/SLAM
 #   bash scripts/launch.sh --nav --map /maps/x.yaml  # nav mode with saved map
-#   bash scripts/launch.sh --rviz                 # base stack + RViz2 display
+#   bash scripts/launch.sh --rviz                 # base stack + RViz2 on the Pi (VNC :5901)
 #   bash scripts/launch.sh --nav --rviz           # nav stack with RViz2
+#   bash scripts/launch.sh --nav --lan            # nav stack, no on-Pi RViz, PC viewer allowed
+#
+# Viewing RViz from a PC instead of on the Pi (much lighter on the Pi — the
+# on-Pi RViz has no GPU and renders with llvmpipe):
+#   on the Pi : bash scripts/launch.sh --nav --lan      # note: --lan, and no --rviz
+#   on the PC : ./scripts/rviz_viewer_pc.sh
 #   RECORD=true bash scripts/launch.sh            # also start rosbag2 recorder
 #
 # What this script does:
@@ -109,12 +115,13 @@ echo "Docker and Compose versions OK."
 RECORD="${RECORD:-false}"
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Parse flags: --dev, --lidar, --nav, --map <path>, --rviz
+# Parse flags: --dev, --lidar, --nav, --map <path>, --rviz, --lan
 # ─────────────────────────────────────────────────────────────────────────────
 DEV_MODE=false
 LIDAR_MODE=false
 NAV_MODE=false
 RVIZ_MODE=false
+LAN_MODE=false
 MAP_FILE=""
 REMAINING_ARGS=()
 
@@ -124,10 +131,22 @@ while [[ $# -gt 0 ]]; do
         --lidar) LIDAR_MODE=true; shift ;;
         --nav)   NAV_MODE=true;  shift ;;
         --rviz)  RVIZ_MODE=true;  shift ;;
+        --lan)   LAN_MODE=true;  shift ;;
         --map)   MAP_FILE="$2";  shift 2 ;;
         *)       REMAINING_ARGS+=("$1"); shift ;;
     esac
 done
+
+# --lan drops the Fast-DDS same-host filter so the PC-side RViz viewer
+# (scripts/rviz_viewer_pc.sh) can discover the robot. Off by default: the
+# filter is what keeps the foreign LAN robot out of domain 0. Remote teleop
+# and the camera stream do NOT need this — they are plain TCP/UDP, not DDS.
+if [[ "$LAN_MODE" == "true" ]]; then
+    export DDS_PROFILE="fastdds_lan.xml"
+    echo "DDS: LAN mode (${DDS_PROFILE}) — off-robot DDS allowed; foreign LAN participants are no longer filtered"
+else
+    export DDS_PROFILE="${DDS_PROFILE:-fastdds_udp.xml}"
+fi
 
 # --nav implies --lidar (nav profile includes the lidar service)
 if [[ "$NAV_MODE" == "true" ]]; then
