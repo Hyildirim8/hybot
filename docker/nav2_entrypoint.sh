@@ -56,7 +56,9 @@ wait_for_nav_services() {
     wait_for_service "/controller_server" 120 &&
     wait_for_service "/smoother_server"   120 &&
     wait_for_service "/planner_server"    120 &&
+    wait_for_service "/behavior_server"   120 &&
     wait_for_service "/bt_navigator"      120 &&
+    wait_for_service "/waypoint_follower" 120 &&
     wait_for_service "/velocity_smoother" 120
 }
 
@@ -65,33 +67,99 @@ wait_for_localization_services() {
     wait_for_service "/amcl"       120
 }
 
-# Transition a lifecycle node using the lifecycle CLI. This still bypasses
-# lifecycle_manager's short timeout, but avoids ros2 service call hangs.
+# Read a lifecycle node's current state label ("unconfigured", "inactive",
+# "active", ...). Prints nothing and returns 1 if the query itself failed.
+lifecycle_state() {
+    local node="$1"
+    local out
+    out=$(timeout -s KILL 20 ros2 lifecycle get "/${node}" 2>/dev/null) || return 1
+    # Output looks like "inactive [2]" — take the label only.
+    out="${out%% *}"
+    [ -n "${out}" ] || return 1
+    echo "${out}"
+}
+
+# Transition a lifecycle node and VERIFY the result by reading its state back.
+#
+# Why not trust the CLI's stdout: `ros2 lifecycle set` first calls
+# get_available_transitions, then change_state. On this robot both calls
+# regularly lose their *response* under DDS load even though the server
+# processed the request — observed on behavior_server during bringup:
+#
+#   [behavior_server.rclcpp]: failed to send response to
+#   /behavior_server/get_available_transitions (timeout): client will not
+#   receive response
+#
+# The old version treated that as a hard failure and tore the ENTIRE launch
+# down (~2 min per retry), even though the node had usually transitioned
+# fine. Reading the state back is the only trustworthy signal, and it also
+# makes the call idempotent: a node already in the target state is a no-op,
+# so re-running bringup is safe.
 lifecycle_transition() {
     local node="$1"
     local transition_id="$2"
     local label="$3"
     local call_timeout="${4:-45}"
 
-    echo "[navigation] ${label} /${node}..."
-    local result
-    result=$(timeout -s KILL "${call_timeout}" ros2 lifecycle set "/${node}" "${label}" 2>&1) || true
+    local target
+    case "${label}" in
+        configure) target="inactive" ;;
+        activate)  target="active"   ;;
+        *)         target="" ;;
+    esac
 
-    if echo "${result}" | grep -qi "Transitioning successful"; then
-        echo "[navigation] /${node} ${label} OK"
-        return 0
-    fi
+    local attempt
+    for attempt in 1 2 3; do
+        if [ -n "${target}" ] && [ "$(lifecycle_state "${node}" || true)" = "${target}" ]; then
+            echo "[navigation] /${node} already ${target}"
+            return 0
+        fi
 
-    echo "${result}" >&2
-    echo "[navigation] /${node} ${label} FAILED" >&2
+        echo "[navigation] ${label} /${node} (try ${attempt}/3)..."
+        local result
+        result=$(timeout -s KILL "${call_timeout}" ros2 lifecycle set "/${node}" "${label}" 2>&1) || true
+
+        if echo "${result}" | grep -qi "Transitioning successful"; then
+            echo "[navigation] /${node} ${label} OK"
+            return 0
+        fi
+
+        # CLI reported nothing useful. The transition may still have landed —
+        # give the node a moment to settle, then check the state itself.
+        echo "${result}" >&2
+        sleep 5
+        if [ -n "${target}" ] && [ "$(lifecycle_state "${node}" || true)" = "${target}" ]; then
+            echo "[navigation] /${node} ${label} OK (CLI response lost, state verified)"
+            return 0
+        fi
+
+        echo "[navigation] /${node} ${label} did not take (try ${attempt}/3)" >&2
+        sleep 5
+    done
+
+    echo "[navigation] /${node} ${label} FAILED after 3 tries" >&2
     return 1
 }
 
+# Order matters and must match Nav2's canonical bringup order: behavior_server
+# has to be up before bt_navigator, because the behavior tree's recovery branch
+# resolves the /backup, /spin and /wait action servers it owns at first tick.
+#
+# 2026-08-12: behavior_server and waypoint_follower were missing from both
+# lists. autostart is False (see launch_cmd below), so nothing else ever sent
+# them a transition — they sat in `unconfigured` indefinitely while every other
+# server reported `active`. Nav2 therefore ran with NO recovery behaviors at
+# all: any stuck robot failed its goal instantly instead of clearing costmaps
+# and retrying. Verified live before the fix: `ros2 lifecycle get
+# /behavior_server` -> unconfigured, /bond had 5 publishers instead of 7, and
+# `ros2 action list` showed no /wait, /spin or /backup.
 configure_nav_nodes() {
     lifecycle_transition "controller_server" 1 "configure" 120 &&
     lifecycle_transition "smoother_server"   1 "configure" 90 &&
     lifecycle_transition "planner_server"    1 "configure" 180 &&
+    lifecycle_transition "behavior_server"   1 "configure" 90 &&
     lifecycle_transition "bt_navigator"      1 "configure" 90 &&
+    lifecycle_transition "waypoint_follower" 1 "configure" 90 &&
     lifecycle_transition "velocity_smoother" 1 "configure" 90
 }
 
@@ -99,7 +167,9 @@ activate_nav_nodes() {
     lifecycle_transition "controller_server" 3 "activate" 120 &&
     lifecycle_transition "smoother_server"   3 "activate" 90 &&
     lifecycle_transition "planner_server"    3 "activate" 180 &&
+    lifecycle_transition "behavior_server"   3 "activate" 90 &&
     lifecycle_transition "bt_navigator"      3 "activate" 90 &&
+    lifecycle_transition "waypoint_follower" 3 "activate" 90 &&
     lifecycle_transition "velocity_smoother" 3 "activate" 90
 }
 

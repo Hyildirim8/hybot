@@ -2,23 +2,50 @@
 <!--
   navigate_to_pose_simple.xml — minimal navigate_to_pose behavior tree.
 
-  Uses only the 4 plugins registered in nav2_params.yaml plugin_lib_names:
+  Uses only the plugins registered in nav2_params.yaml plugin_lib_names:
     nav2_rate_controller_bt_node
     nav2_pipeline_sequence_bt_node
+    nav2_recovery_node_bt_node
+    nav2_clear_costmap_service_bt_node
     nav2_compute_path_to_pose_action_bt_node
     nav2_follow_path_action_bt_node
+  (RecoveryNode/PipelineSequence are Nav2 nodes; SequenceStar is a
+   BehaviorTree.CPP v3 builtin and needs no plugin.)
 
-  No recovery behaviors — if path compute or following fails, the action
-  returns FAILURE immediately. slam_manager_node handles retries via goal
-  blacklisting and frontier re-selection.
+  Recovery policy — deliberately NON-PHYSICAL.
+
+  Keşif sırasında robotun yerinde dönmesi/geri gitmesi istenmiyor: hedef
+  ulaşılamıyorsa slam_manager_node onu blacklist'leyip başka bir frontier
+  seçmeli. O yüzden Spin/BackUp/DriveOnHeading YOK.
+
+  Ama "hiç recovery yok" da yanlıştı: local costmap'te bir hayalet engel
+  (yanlış işaretlenmiş bir tarama, ya da robotun geçtiği yeri temizleyemeyen
+  bir raytrace) kalırsa planner sonsuza kadar başarısız oluyor ve o bölgedeki
+  HER hedef reddediliyordu. İki costmap'i temizleyip tekrar denemek robotu
+  hareket ettirmez, sadece bayat veriyi atar — keşif politikasını bozmadan bu
+  kilitlenmeyi çözer.
+
+  2026-08-12: RateController konumu da düzeltildi. Eskiden tüm
+  PipelineSequence'i sarıyordu, yani FollowPath da 1 Hz'de tick ediliyor ve
+  hedefe varış/başarısızlık 1 saniye gecikmeyle fark ediliyordu. Nav2'nin
+  kanonik yapısında RateController YALNIZCA ComputePathToPose'u sarar
+  (yeniden planlama 1 Hz), FollowPath ise her tick'te çalışır.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RateController hz="1.0">
+    <RecoveryNode number_of_retries="3" name="NavigateRecovery">
       <PipelineSequence name="NavigateWithReplanning">
-        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        <RateController hz="1.0">
+          <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        </RateController>
         <FollowPath path="{path}" controller_id="FollowPath"/>
       </PipelineSequence>
-    </RateController>
+      <SequenceStar name="ClearingActions">
+        <ClearEntireCostmap name="ClearLocalCostmap"
+                            service_name="local_costmap/clear_entirely_local_costmap"/>
+        <ClearEntireCostmap name="ClearGlobalCostmap"
+                            service_name="global_costmap/clear_entirely_global_costmap"/>
+      </SequenceStar>
+    </RecoveryNode>
   </BehaviorTree>
 </root>
