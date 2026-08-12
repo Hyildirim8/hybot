@@ -382,6 +382,66 @@ services:
     depends_on:
       - robot_description
       - imu
+      - rf2o
+
+  # ── rf2o ──────────────────────────────────────────────────────────────────
+  # rf2o_laser_odometry — lidar taramalarından odometri türetir (range-flow
+  # scan matching). Tekerlek encoder'larına HİÇ bakmaz, dolayısıyla makara
+  # kayması ve yanlış tick/tur kalibrasyonundan etkilenmez.
+  #
+  # Neden eklendi: config/rover_params.yaml'daki odom_linear_scale=0.50 /
+  # odom_angular_scale=0.85 çarpanları gerçek bir encoder-geometri hatasının
+  # üstünü örtüyor ve rijit bir gövdede tutarsız (2x lineer, 1.18x açısal).
+  # MentorPi aynı sorunu aynı şekilde çözüyor: driver/controller/config/ekf.yaml
+  # içinde odom0=odom_raw (encoder HIZLARI) + odom1=odom_rf2o (lazer POZU).
+  #
+  # publish_tf: false — TF'i EKF yayınlıyor (config/ekf.yaml). rf2o burada
+  # sadece /odom_rf2o topic'ini üretir, EKF onu odom1 olarak füzyonlar. İki
+  # düğüm birden odom→base_link yayınlarsa TF ağacı bozulur.
+  #
+  # Girdi olarak /scan_raw (720 bin @ 12.7 Hz) değil /scan (360 bin @ 6.5 Hz)
+  # kullanılıyor: RPi'de işi ~4 kat azaltır ve rf2o'nun 5 Hz'lik çıkışı için
+  # 6.5 Hz girdi fazlasıyla yeterli.
+  rf2o:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
+    command:
+      - ros2
+      - run
+      - rf2o_laser_odometry
+      - rf2o_laser_odometry_node
+      - --ros-args
+      - -p
+      - laser_scan_topic:=/scan
+      - -p
+      - odom_topic:=/odom_rf2o
+      - -p
+      - base_frame_id:=base_link
+      - -p
+      - odom_frame_id:=odom
+      - -p
+      - publish_tf:=false
+      # freq, rf2o'nun YENİ TARAMA VAR MI diye baktığı hız — tarama işleme
+      # hızı değil. 5.0'da timer /scan ile senkron olmadığı için taramaların
+      # yarısı atlanıyor ve çıkış 2.6 Hz'e düşüyordu (ölçüldü 2026-08-12).
+      # /scan'den (~6.5 Hz) hızlı yoklamak her taramanın işlenmesini garanti
+      # eder. Maliyeti yok: tarama başına işlem süresi 0.13-0.47 ms, yani
+      # 10 Hz'de bile tek çekirdeğin ~%0.5'i (ölçülen toplam: %1.4-1.55).
+      - -p
+      - freq:=10.0
+      # freq > tarama hızı olduğu için her tick'te yeni tarama olmuyor ve rf2o
+      # saniyede ~3 kez "Waiting for laser_scans" WARN'ı basıyor. Bu bu kurulumda
+      # NORMAL, arıza değil — ama log'u boğuyor. Gerçek sağlık göstergesi
+      # /odom_rf2o'nun yayın hızıdır (`ros2 topic hz /odom_rf2o`, ~6 Hz
+      # beklenir); rf2o ölürse topic susar. Hata ayıklarken bu satırı kaldır.
+      - --log-level
+      - error
+    restart: unless-stopped
+    depends_on:
+      - lidar
 
   # ── slam_manager ──────────────────────────────────────────────────────────
   # SLAM haritalama yöneticisi ve otonom frontier keşfi.
