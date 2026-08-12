@@ -333,8 +333,14 @@ UDP_DRAIN_BUDGET_S = 0.05
 
 
 def _seq_newer(a: int, b: int) -> bool:
-    """True if u32 frame sequence a is newer than b, wraparound-safe."""
-    return ((a - b) & 0xFFFFFFFF) < 0x80000000
+    """True if u32 frame sequence a is strictly newer than b, wraparound-safe.
+
+    The 0 < part is load-bearing: without it a == b counts as "newer", so every
+    chunk of the frame being assembled restarts that frame and it can never
+    complete. Symptom is a video window that opens and stays black forever.
+    """
+    diff = (a - b) & 0xFFFFFFFF
+    return 0 < diff < 0x80000000
 
 
 def _hello_loop(sock: socket.socket, addr, running_fn) -> None:

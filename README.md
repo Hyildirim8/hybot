@@ -16,6 +16,46 @@ micro-ROS ile sürülür.
 
 ---
 
+## RViz'i nerede çalıştırmalı?
+
+RViz'in iki çalıştırma yolu var ve **birbirini otomatik dışlamıyorlar** — PC'de
+açmak Pi'dekini kapatmaz, `--rviz` ile başlattıysanız ikisi aynı anda çalışır
+ve Pi boşuna render etmeye devam eder.
+
+| | **Pi üzerinde** (`--rviz`) | **PC üzerinde** (`--lan`) |
+|---|---|---|
+| Nasıl bakılır | VNC ile `<pi-ip>:5901` | PC'de doğrudan pencere |
+| Render eden | Pi'nin CPU'su (GPU yok, `llvmpipe`) | PC'nin GPU'su |
+| Pi'ye maliyeti | **~%30-50 CPU** (720p'de; 1080p'de %120-142 ölçüldü) | **sıfır** |
+| DDS profili | varsayılan (izole) | `--lan` şart |
+| Yabancı LAN cihazı riski | yok | var (aşağıya bakın) |
+| Ne zaman | Hızlı bakış, PC yokken | Uzun süreli izleme, haritalama |
+
+**Karar:** Uzun süre bakacaksanız PC'yi kullanın. Pi'de RViz açık bırakmak
+EKF'i aç bırakacak kadar CPU yiyor (`Failed to meet update rate` uyarıları
+buradan gelir).
+
+```bash
+# Pi'de RViz (Pi render eder)
+bash scripts/launch.sh --nav --rviz          # sonra VNC: <pi-ip>:5901
+
+# PC'de RViz (Pi render etmez)  ← önerilen
+bash scripts/launch.sh --nav --lan           # Pi'de: --lan var, --rviz YOK
+./scripts/rviz_viewer_pc.sh                  # PC'de
+```
+
+Pi'de RViz'i sonradan kapatmak için tüm yığını yeniden başlatmaya gerek yok:
+```bash
+docker compose stop rviz
+```
+Ama PC'den bakabilmek için DDS profilinin `--lan` olması gerekir; profil
+değişikliği container'ların yeniden oluşturulmasını gerektirir.
+
+Ayrıntılar: Pi tarafı için [bölüm 1](#1-robotun-kendi-üzerinde-çalıştırma-pide),
+PC tarafı için [bölüm 2.1](#21-rvizi-pcde-açmak-önerilen).
+
+---
+
 ## 1. Robotun kendi üzerinde çalıştırma (Pi'de)
 
 Tüm komutlar Pi'de, depo kök dizininde çalıştırılır.
@@ -188,7 +228,36 @@ durdurup başlatmak için:
 | RViz PC'de boş | Pi `--lan` ile başlatılmamış (bölüm 2.1) |
 | RViz'de yabancı robot modeli / mesh hatası | LAN modundasınız ve yabancı cihaz domain 0'a girmiş — varsayılan profile dönün |
 | Harita kayıyor / dağılıyor | Lidar tarama yoğunluğu. `/scan_slam` tarama başına ~190 geçerli nokta vermeli |
-| Pi çok yavaş, EKF "Failed to meet update rate" | Pi'de RViz açık olabilir — PC viewer'a geçin |
+| Pi çok yavaş, EKF "Failed to meet update rate" | Pi'de RViz açık olabilir — `docker compose stop rviz`, PC viewer'a geçin |
+| PC'de kamera penceresi siyah / görüntü yok | Aşağıdaki kamera teşhisine bakın |
+
+### Kamera görüntüsü PC'ye gelmiyorsa
+
+Sırayla, her adım bir öncekini eler:
+
+```bash
+# 1. Pi'de kamera kaynağı üretiyor mu (FPS satırı akmalı)
+docker logs -f ecza-robotu-csi_camera-1 | grep FPS
+
+# 2. Host tarafındaki rpicam-vid ayakta mı (container DEĞİL, systemd servisi)
+systemctl is-active ecza-robotu-csi-cam
+
+# 3. Robot şu an birine yayın yapıyor mu — 0 ise abone yok demektir
+a=$(grep -A1 ^Udp: /proc/net/snmp | tail -1 | awk '{print $4}'); sleep 5
+b=$(grep -A1 ^Udp: /proc/net/snmp | tail -1 | awk '{print $4}'); echo $(( (b-a)/5 )) paket/sn
+
+# 4. PC abone olarak kaydolmuş mu
+docker logs ecza-robotu-csi_camera-1 | grep "subscriber registered"
+```
+
+1-2 çalışıyor ama 3 sıfırsa: PC istemcisinin **video thread'i ölmüştür**.
+Joystick TCP bağlantısı ayakta kalabildiği için istemci çalışıyor görünür;
+kamera aboneliği ise 5 sn TTL ile sessizce düşer. PC'de istemciyi yeniden
+başlatın ve konsoldaki hatayı okuyun:
+
+```bash
+./scripts/remote_teleop_pc.sh --cam
+```
 | Start'a basınca otonom moddan çıkmıyor | Düzeltildi; buton indeksinin `9` olduğunu doğrulayın |
 
 ### Değiştirilmemesi gerekenler
