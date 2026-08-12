@@ -42,11 +42,21 @@ slam_toolbox:
     transform_timeout: 1.5
     tf_buffer_duration: 60.0
     stack_size_to_use: 40000000
+    # Must be >= max_laser_range. It was 10.0 against max_laser_range: 12.0,
+    # so every return between 10 and 12 m was dropped when scans were added to
+    # the running buffer — the same 10-12 m band max_laser_range was raised to
+    # 12.0 to capture. MentorPi keeps both at 12.0.
+    scan_buffer_maximum_scan_distance: 12.0
 
     # Loop closure
     enable_interactive_mode: false
     use_scan_matching: true
-    use_scan_barycenter: false
+    # true = use the scan's barycenter (centroid of its returns) instead of the
+    # sensor origin when measuring inter-scan distance. false biased every
+    # distance measurement toward the sensor pose, which on a 360 deg lidar in a
+    # room makes scans taken from different spots look closer together than they
+    # are. Both MentorPi and the slam_toolbox default are true.
+    use_scan_barycenter: true
     minimum_travel_distance: 0.12   # RPi CPU dengesi: çok sık tarama işleme
     # 0.45 -> 0.10: SLAM'ı dönüş sırasında bloke ederek kaymayı "önlemeye"
     # çalışmak ters etki yaptı — dönüş sırasında hiç güncelleme yapılmayınca
@@ -54,17 +64,66 @@ slam_toolbox:
     # 0.10 daha önce doğrulanmış çalışan değer (max_slam_angular_z: 0.65 ile
     # birlikte, bkz. lidar.launch.py).
     minimum_travel_heading: 0.10
-    scan_buffer_size: 10
-    scan_buffer_maximum_scan_distance: 10.0
-    link_match_minimum_response_fine: 0.50  # daha yüksek eşik: kötü match'i reddet
+    # 10 -> 20 (MentorPi'deki değer). Bu tampon, yeni taramanın eşleştirildiği
+    # "running scan" zincirinin uzunluğu. SLAM'a giden akış zaten 2.2 Hz, yani
+    # 20 tarama ~9 saniyelik geçmiş demek; daha uzun zincir dönüşlerden sonra
+    # tekrar kilitlenmeyi kolaylaştırır ve RPi'ye ek yükü ihmal edilebilir.
+    scan_buffer_size: 20
+    # 0.50 -> 0.10.  BU, HARİTA KAYMASININ ASIL SEBEBİYDİ.
+    #
+    # Bu eşik "kötü match'i reddet" için değil — pose graph'ta iki tarama
+    # arasında KENAR (link) kurulup kurulmayacağına karar veriyor. 0.50, hem
+    # ardışık kenarları hem de loop closure zincirlerinin doğrulanmasını
+    # reddedecek kadar yüksek: graf seyrek kalıyor, Ceres'in düzeltecek bir
+    # kısıtı olmuyor, dolayısıyla birikmiş odometri hatası HİÇ geri alınmıyordu.
+    # Ölçüm (2026-08-12): map->odom = 32.6 derece, yani SLAM 33 derecelik bir
+    # odom sapmasını taşıyor ama graf kapanmadığı için haritaya işliyor.
+    # 0.10 hem MentorPi'nin hem slam_toolbox'ın varsayılanı.
+    link_match_minimum_response_fine: 0.10
     distance_variance_penalty: 1.3
     # 8.0 -> 0.5: açısal düzeltmeleri bu kadar ağır cezalandırmak SLAM'ın
     # dönüş sonrası kaymayı düzeltmesini de engelliyordu. 0.5 daha önce
     # doğrulanmış çalışan değer.
     angle_variance_penalty: 0.5
     fine_search_angle_offset: 0.00349
-    coarse_search_angle_offset: 0.524
+    # 0.524 (30 derece) -> 0.349 (20 derece). Kaba arama penceresini genişletmek
+    # her taramada daha çok aday açı denetiyor (RPi'de boşa CPU) ve 2.2 Hz'lik
+    # seyrek akışta yanlış açıya kilitlenme ihtimalini artırıyor. MentorPi ve
+    # slam_toolbox varsayılanı 0.349.
+    coarse_search_angle_offset: 0.349
     coarse_angle_resolution: 0.0349
-    minimum_angle_penalty: 1.2
+    # 1.2 -> 0.9.  1.2 GEÇERSİZ BİR DEĞERDİ.
+    #
+    # Karto'da ceza şöyle hesaplanır:
+    #   anglePenalty = max(minimum_angle_penalty,
+    #                      1.0 - 0.2 * sapma^2 / angle_variance_penalty)
+    #   response *= distancePenalty * anglePenalty
+    # Yani ceza (0, 1] aralığında bir ÇARPAN olmalı. Tabanı 1.2 yapmak cezayı
+    # her zaman >= 1.2 tutar: açısal sapmayı cezalandırmak yerine response'u
+    # 1.44 kata kadar ŞİŞİRİR. Sonuç, kötü açılı eşleşmelerin iyi görünmesi.
+    # Yukarıdaki link eşiğinin 0.50'ye çıkarılmış olması muhtemelen bu şişmeyi
+    # dengelemek içindi; ikisi birlikte düzeltiliyor.
+    minimum_angle_penalty: 0.9
     minimum_distance_penalty: 0.5
     use_response_expansion: true
+
+    # ── Loop closure ─────────────────────────────────────────────────────────
+    # Bu blok daha önce dosyada hiç yoktu. Değerler slam_toolbox varsayılanıyla
+    # aynı (yani davranış değişmiyor), ama artık görünür ve ayarlanabilir:
+    # haritalama bozulduğunda ilk bakılacak yer burası.
+    do_loop_closing: true
+    loop_search_maximum_distance: 3.0
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+    link_scan_maximum_distance: 1.5
+
+    # ── Correlation / search space ───────────────────────────────────────────
+    # Bunlar da eksikti; MentorPi ve slam_toolbox varsayılanlarıyla aynı.
+    correlation_search_space_dimension: 0.5
+    correlation_search_space_resolution: 0.01
+    correlation_search_space_smear_deviation: 0.1
+    loop_search_space_dimension: 8.0
+    loop_search_space_resolution: 0.05
+    loop_search_space_smear_deviation: 0.03

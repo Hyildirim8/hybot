@@ -91,6 +91,10 @@ bt_navigator:
       - nav2_compute_path_through_poses_action_bt_node
       - nav2_follow_path_action_bt_node
       - nav2_remove_passed_goals_action_bt_node
+      # Costmap temizleme recovery'si için eklendi (bkz. iki BT xml dosyası).
+      # Fiziksel hareket YOK — Spin/BackUp node'ları bilerek kayıtlı değil.
+      - nav2_recovery_node_bt_node
+      - nav2_clear_costmap_service_bt_node
 
 controller_server:
   ros__parameters:
@@ -99,8 +103,20 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001     # non-zero: mecanum can strafe
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 5.0    # SLAM geçici yüklendiğinde TF boşluğuna dayanıklı
-    progress_checker_plugins: ["progress_checker"]
+    # 5.0 -> 1.0. Bu, controller geçerli bir komut üretemediğinde robotun SON
+    # komutla ne kadar süre sürmeye devam edeceği. 5 saniye, 0.75 m/s'de ~3.7
+    # metre KÖR sürüş demek — otonom modda doğrudan çarpma sebebi. Costmap ve
+    # DWB transform_tolerance değerleri de 1.0'a çekildi, dolayısıyla TF
+    # gecikmesine karşı tampon hâlâ var. MentorPi 0.3 kullanıyor.
+    failure_tolerance: 1.0
+    # Humble'da parametrenin adı TEKİL: progress_checker_plugin.
+    # Çoğul biçim (progress_checker_plugins) Iron ile geldi; burada
+    # tanımlanmadığı için sessizce yok sayılıyordu. Canlı doğrulama:
+    # `ros2 param list /controller_server | grep progress` -> yalnızca
+    # `progress_checker_plugin` çıkıyor. Varsayılan id de "progress_checker"
+    # olduğu için aşağıdaki alt-blok şans eseri uygulanıyordu; yine de
+    # yapılandırmanın gerçekten okunduğu bir isim kullanılıyor.
+    progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
     odom_topic: "odom"
@@ -145,7 +161,10 @@ controller_server:
       sim_time: 1.2
       linear_granularity: 0.05
       angular_granularity: 0.025
-      transform_tolerance: 4.0    # map→odom 4 sn'ye kadar bayat olsa da çalışmaya devam et
+      # 4.0 -> 1.0. DWB yörüngeleri odom karesinde değerlendirirken 4 saniyelik
+      # bayat TF kullanmak, robotun 3 metre önce bulunduğu yer için plan yapması
+      # demekti. failure_tolerance ile birlikte düşürüldü.
+      transform_tolerance: 1.0
       xy_goal_tolerance: 0.08
       trans_stopped_velocity: 0.05
       short_circuit_trajectory_evaluation: true
@@ -190,18 +209,24 @@ local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: false
-      update_frequency: 2.5   # lighter on RPi; prevents TF/map lag during motion
-      publish_frequency: 1.5
+      # 12x12 -> 6x6 sayesinde hücre sayısı 57.6k'dan 14.4k'ya düştü, o yüzden
+      # güncelleme hızı 2.5 -> 4.0'a çıkarılabildi. Local costmap'in görevi
+      # rviz'de manzara göstermek değil, DWB'nin denediği yörüngeleri
+      # kapsamaktır: sim_time 1.2 s x max_speed_xy 0.90 m/s = 1.1 m ileri.
+      # 6x6 (robot etrafında 3 m yarıçap) buna fazlasıyla yeter; 12 m menzilin
+      # tamamı zaten global costmap'te (yukarıda obstacle_layer eklendi) ve
+      # /scan görselleştirmesinde görünüyor.
+      update_frequency: 4.0
+      publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
-      transform_tolerance: 3.0
+      # 3.0 -> 1.0. 3 saniyelik tolerans, 0.75 m/s'de 2.2 metrelik konum
+      # hatasıyla engel işaretlemek demek — engeller costmap'e yanlış yere
+      # çizilir. 1.0 s RPi gecikmesi için hâlâ cömert (MentorPi 0.1 kullanıyor).
+      transform_tolerance: 1.0
       rolling_window: true
-      # 4 -> 12 m: 4x4'lük pencere robottan 2 m ötesini kesiyordu, bu yüzden
-      # lidar'ın gördüğü engellerin çoğu hiç çizilmiyordu. 12 m, sensörün
-      # kullanılabilir menzilini (A2M12 spec) kapsar. Maliyet: 240x240 = 57.6k
-      # hücre (eskiden 6.4k); yük sorun olursa önce bu değer düşürülmeli.
-      width: 12
-      height: 12
+      width: 6
+      height: 6
       resolution: 0.05
       # Square footprint matching rover body (0.38 m × 0.26 m) + 2 cm margin
       footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
@@ -209,8 +234,12 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.22   # 0.35'den düşürüldü: min geçiş genişliği 0.96m→0.70m (kapı/koridor geçişi)
+        # global_costmap'teki aynı gerekçe: inflation_radius circumscribed
+        # yarıçaptan (0.258 m) büyük olmalı. Local'de 0.30 yeterli — DWB'nin
+        # ObstacleFootprint kritiği gerçek footprint ile çarpışmayı zaten
+        # kesin olarak kontrol ediyor, burada amaç sadece tutarlı maliyet.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.30
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -250,7 +279,7 @@ global_costmap:
       publish_frequency: 0.5
       global_frame: map
       robot_base_frame: base_link
-      transform_tolerance: 3.0
+      transform_tolerance: 1.0   # local_costmap ile aynı gerekçe (3.0 -> 1.0)
       # Rolling window KAPALI: static_layer, costmap'i gelen /map ile birebir
       # aynı boyuta ve orijine getirir (resizeMap). Böylece rviz'de costmap ile
       # harita tam üst üste biner (tek bölge) ve keşif ilerledikçe costmap de
@@ -273,14 +302,53 @@ global_costmap:
       footprint_padding: 0.02
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "inflation_layer"]
+      # obstacle_layer EKLENDİ (2026-08-12). Önceden sadece static + inflation
+      # vardı, yani global planner YALNIZCA /map'i görüyordu. /map ise SLAM'da
+      # 1.5 s'de bir (map_update_interval), nav modunda ise HİÇ güncellenmiyor.
+      # Sonuç: haritada olmayan bir engel (insan, sandalye, açılmış kapı)
+      # planner için görünmezdi — planner tam üstünden geçen bir yol üretiyor,
+      # local planner engeli görüp yolu reddediyor, robot duruyor ve hedef
+      # başarısız oluyordu. MentorPi de global costmap'te obstacle_layer
+      # kullanıyor (navigation/config/nav2_params.yaml).
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: true
+        observation_sources: scan
+        scan:
+          topic: /scan
+          max_obstacle_height: 2.0
+          clearing: true
+          marking: true
+          data_type: "LaserScan"
+          # clearing menzili marking menzilinden büyük olmalı, yoksa uzaklaşan
+          # engeller global costmap'te kalıcı hayalet olarak kalır.
+          raytrace_max_range: 12.0
+          raytrace_min_range: 0.0
+          obstacle_max_range: 10.0
+          obstacle_min_range: 0.0
+          inf_is_valid: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 2.0
-        inflation_radius: 0.22   # local costmap ile aynı — global planner da dar geçişleri görebilsin
+        # 0.22 -> 0.35, cost_scaling_factor 2.0 -> 3.0.
+        #
+        # Footprint 0.42 x 0.30 m: inscribed yarıçap 0.15, circumscribed 0.258.
+        # inflation_radius (0.22) circumscribed'ın (0.258) ALTINDAYDI — bu
+        # geçersiz bir yapılandırma: costmap'in daire yaklaşımı ile DWB'nin
+        # gerçek footprint çarpışma testi birbiriyle çelişiyor, planner köşeleri
+        # kesen yollar üretiyor ve controller sonra bunları reddediyordu.
+        #
+        # NOT: inflation_radius geçişleri DARALTMAZ. Sadece inscribed yarıçap
+        # (0.15 m) içindeki hücreler 254/LETHAL olur; onun dışındaki şişirme
+        # navfn için "pahalı ama geçilebilir"dir (navfn yalnızca 254'ü engel
+        # sayar). 0.35, dar kapıları kapatmadan yolu koridor ortasına çeker.
+        # Daha önce 0.35 -> 0.22 indirilmesinin gerekçesi ("min geçiş genişliği
+        # 0.96m") bu yüzden geçerli değildi.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.35
       always_send_full_costmap: true
 
 map_server:
