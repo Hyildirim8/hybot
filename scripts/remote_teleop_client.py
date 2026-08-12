@@ -54,6 +54,7 @@ verified F710 default even if a --calibrate file exists.
 import argparse
 import json
 import os
+import select
 import socket
 import struct
 import sys
@@ -319,6 +320,21 @@ class JoystickSender:
 UDP_HEADER = struct.Struct('!IHH')
 UDP_HELLO_INTERVAL = 1.0   # re-sent to renew this client's subscription
 STREAM_STALL_S = 2.0       # no frame in this long -> show "unavailable"
+# A frame is ~70 chunks, all pushed back to back. The kernel has to hold that
+# whole burst while this process is busy decoding and drawing the previous
+# frame, and the default receive buffer is small enough that the tail of a
+# burst gets dropped — which costs the WHOLE frame, since a JPEG is only
+# decodable complete. 4 MB is many frames' worth of headroom.
+UDP_RCVBUF = 4 * 1024 * 1024
+# Upper bound on how long one drain pass may spend swallowing packets before
+# yielding to draw. Only a safety valve against a sender fast enough to keep
+# the socket permanently readable; normal passes exit on EWOULDBLOCK first.
+UDP_DRAIN_BUDGET_S = 0.05
+
+
+def _seq_newer(a: int, b: int) -> bool:
+    """True if u32 frame sequence a is newer than b, wraparound-safe."""
+    return ((a - b) & 0xFFFFFFFF) < 0x80000000
 
 
 def _hello_loop(sock: socket.socket, addr, running_fn) -> None:
@@ -338,7 +354,11 @@ def _video_loop(host: str, port: int, status_fn) -> None:
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.settimeout(0.5)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, UDP_RCVBUF)
+    except OSError:
+        pass  # capped by net.core.rmem_max; the smaller buffer still works
+    sock.setblocking(False)
     running = True
     threading.Thread(target=_hello_loop, args=(sock, (host, port), lambda: running),
                       daemon=True).start()
@@ -355,28 +375,57 @@ def _video_loop(host: str, port: int, status_fn) -> None:
 
     try:
         while True:
-            try:
-                packet, _ = sock.recvfrom(65536)
-            except socket.timeout:
-                packet = None
+            # ── Drain, then draw ONCE ────────────────────────────────────────
+            # This used to read a single packet and then call cv2.waitKey(1)
+            # before reading the next one. At ~70 chunks per frame that is ~70
+            # waitKey calls per frame, and waitKey's real resolution is a
+            # millisecond at best — so the receiver could not go faster than
+            # ~14 fps no matter what the Pi sent, and the packets that piled up
+            # meanwhile overflowed the socket buffer and cost whole frames.
+            # Now every packet already queued is swallowed first, and only the
+            # newest complete frame is decoded and drawn.
+            select.select([sock], [], [], 0.05)
+            newest_jpg = None
+            drain_until = time.monotonic() + UDP_DRAIN_BUDGET_S
+            while True:
+                try:
+                    packet, _ = sock.recvfrom(65536)
+                except (BlockingIOError, socket.timeout):
+                    break
+                except OSError:
+                    break
+                if len(packet) < UDP_HEADER.size:
+                    continue
 
-            if packet is not None and len(packet) >= UDP_HEADER.size:
                 seq, idx, total = UDP_HEADER.unpack_from(packet)
                 data = packet[UDP_HEADER.size:]
-                if seq != cur_seq:
+                if cur_seq is None or _seq_newer(seq, cur_seq):
+                    # Newer frame started — abandon whatever was incomplete.
                     cur_seq, cur_total, cur_chunks = seq, total, {}
+                elif seq != cur_seq:
+                    # Straggler from an already-superseded frame. Dropping it
+                    # matters: the old code reset on *any* seq mismatch, so one
+                    # late packet threw away the frame being assembled.
+                    continue
                 cur_chunks[idx] = data
 
-                if len(cur_chunks) == cur_total:
-                    jpg = b''.join(cur_chunks[i] for i in range(cur_total))
-                    cur_seq = None
-                    arr = np.frombuffer(jpg, dtype=np.uint8)
-                    frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                    if frame is not None:
-                        last_frame_t = time.monotonic()
-                        cv2.putText(frame, status_fn(), (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
-                                    0.7, (0, 255, 0), 2, cv2.LINE_AA)
-                        cv2.imshow(window, frame)
+                if cur_total and len(cur_chunks) == cur_total:
+                    # Keep only the newest complete frame from this pass —
+                    # decoding intermediate ones would just add latency.
+                    newest_jpg = b''.join(cur_chunks[i] for i in range(cur_total))
+                    cur_seq, cur_total, cur_chunks = None, 0, {}
+
+                if time.monotonic() > drain_until:
+                    break
+
+            if newest_jpg is not None:
+                arr = np.frombuffer(newest_jpg, dtype=np.uint8)
+                frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                if frame is not None:
+                    last_frame_t = time.monotonic()
+                    cv2.putText(frame, status_fn(), (10, 25), cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7, (0, 255, 0), 2, cv2.LINE_AA)
+                    cv2.imshow(window, frame)
 
             if time.monotonic() - last_frame_t > STREAM_STALL_S:
                 blank = np.zeros((480, 640, 3), dtype=np.uint8)
