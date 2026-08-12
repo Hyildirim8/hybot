@@ -17,10 +17,37 @@ SHELL ["/bin/bash", "-c"]
 
 WORKDIR /ws
 
+# ── rf2o_laser_odometry (built from source — no arm64 apt package) ──────────
+# Laser-scan odometry. Fused into the EKF as an absolute x/y/yaw source so the
+# state estimate no longer depends on the (known-miscalibrated) wheel encoders.
+# Same arrangement MentorPi uses: driver/controller/config/ekf.yaml there has
+# odom0=odom_raw (encoder velocities) + odom1=odom_rf2o (laser pose).
+#
+# The sed patch is REQUIRED, not cosmetic. rf2o only processes scans while
+# GT_pose_initialized is true, and that flag starts false whenever
+# init_pose_from_topic is non-empty — it only flips after one message arrives
+# on that topic. The upstream default is "/base_pose_ground_truth", which
+# nothing in this stack publishes, so rf2o silently discards every scan and
+# logs "Waiting for laser_scans" forever. rcl rejects an empty value in
+# `-p name:=`, so the default has to be fixed at compile time.
+#
+# Cloned BEFORE `COPY src/` so this layer stays cached when workspace sources
+# change (COPY merges into src/, it does not replace the directory).
+RUN git clone --depth 1 --branch ros2 \
+        https://github.com/MAPIRlab/rf2o_laser_odometry.git \
+        src/rf2o_laser_odometry && \
+    sed -i 's|"init_pose_from_topic", "/base_pose_ground_truth"|"init_pose_from_topic", ""|' \
+        src/rf2o_laser_odometry/src/CLaserOdometry2DNode.cpp && \
+    grep -q '"init_pose_from_topic", ""' \
+        src/rf2o_laser_odometry/src/CLaserOdometry2DNode.cpp
+
 # Copy source packages so rosdep can inspect package.xml files.
 # src/ may be empty during initial scaffold; a placeholder keeps the COPY valid.
 COPY src/ src/
 
+# cmake_modules skip-key: rf2o declares it but it is not packaged for Humble;
+# the CMake config it wants (FindEigen) is provided by the eigen3_cmake_module
+# that ships with the ROS 2 desktop deps already present in this base image.
 RUN apt-get update -qq && \
     rosdep update --rosdistro humble && \
     rosdep install \
@@ -28,7 +55,7 @@ RUN apt-get update -qq && \
         --ignore-src \
         --rosdistro humble \
         -y \
-        --skip-keys "micro_ros_agent ament_python" && \
+        --skip-keys "micro_ros_agent ament_python cmake_modules" && \
     rm -rf /var/lib/apt/lists/*
 
 # ─────────────────────────────────────────────────────────────────────────────
