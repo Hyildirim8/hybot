@@ -141,7 +141,18 @@
     #     FL  95.44   FR 116.37   RL  95.33   RR 114.31 rad
     #     sol 95.39   sağ 115.34   →  sağ/sol = 1.209
     # Aynı sürüşte KOMUT dengeliydi (sol 103.12 / sağ 107.75 = 1.045), yani
-    # dört teker fiziksel olarak birlikte döndü ve fark ölçümde.
+    # dört teker fiziksel olarak birlikte döndü.
+    #
+    # MEKANİZMA — encoder ölçek hatası DEĞİL. Aynı gün yapılan yerinde dönüş
+    # testinde aynı ham topic sol/sağ |oran| = 0.9915 verdi, yani dönüşte
+    # tekerler dengeli. Encoder'ların kendisinde ölçek hatası olsaydı her iki
+    # harekette de görünürdü. Görünmediğine göre sebep DÜZ SÜRÜŞE ÖZGÜ
+    # ASİMETRİK PATİNAJ (muhtemelen makara yönelimi/hizası — bkz. daha önceki
+    # mekanik makara sorunu).
+    #
+    # Sonuç: aşağıdaki katsayılar semptomu doğru düzeltiyor (doğrulandı: 3 m'de
+    # +29.0 deg -> -1.1 deg) ama ZEMİNE VE HIZA BAĞLI. Farklı bir yüzeyde
+    # yeniden ölçmek gerekebilir. Kalıcı çözüm mekanik tarafta.
     #
     # Bu dengesizlik /odom'daki sahte dönüşün TEK kaynağıydı: mecanum yaw
     # formülü wz ~ (-FL + FR - RL + RR) olduğu için sol/sağ farkı doğrudan
@@ -180,13 +191,21 @@
     # yalnızca şeritmetre ölçümlerine dayanıyor.
     odom_linear_scale: 0.650
     odom_lateral_scale: 0.50     # lateral odom gerçek sağ/sol hareketle aynı yönde kalsın
-    # UYARI: bu değer artık ölçülmemiş bir kalıntı. 0.85, state_scale_factors
-    # ile giderilen sol/sağ dengesizliğinin ürettiği sahte dönüşü bastırmak
-    # için konmuştu. Dengesizlik kaynağında düzeldiğine göre buradaki doğru
-    # değer büyük ihtimalle 1.0'a yakın — ama YERİNDE DÖNÜŞ TESTİ yapılmadan
-    # bilinemez (2 tam tur, gerçek açıyla karşılaştır). Test edilene kadar
-    # 0.85 bırakıldı; en azından bilinen bir başlangıç noktası.
-    odom_angular_scale: 0.85
+    # 0.85 -> 0.504. ÖLÇÜLDÜ (2026-08-13): yerinde 2 tam tur (720 deg gerçek),
+    # /odom -1215.4 deg bildirdi. Ham (ölçeksiz) dönüş 1215.4/0.85 = 1430.0 deg,
+    # dolayısıyla 720/1430.0 = 0.504. Ham tekerlerden bağımsız doğrulama:
+    # wz ~ (r/4k)(-FL+FR-RL+RR) = -1265 deg hesap vs -1215 deg ölçüm (%4).
+    #
+    # Neden 1'den bu kadar uzak: mecanumda YERİNDE DÖNÜŞ devasa patinaj
+    # demektir — dört teker de yana sürtünür. Encoder'ın %69 fazla okuması
+    # fiziksel, bir hata değil.
+    #
+    # SINIR: bu yüzden tek bir açısal ölçek her harekette doğru olamaz.
+    # Yerinde dönüşteki patinaj ile yay çizerek dönerkenki patinaj farklıdır;
+    # 0.504 yerinde dönüşe göre kalibre edildi, yaylarda bir miktar az
+    # okuyacaktır. Nav2 çoğunlukla yay çizdiği için, otonom sürüşte açısal
+    # sapma görülürse önce burayı değil bu uzlaşmayı hatırla.
+    odom_angular_scale: 0.504
     odom_linear_deadband: 0.02
     odom_lateral_deadband: 0.0
     odom_angular_deadband: 0.05
