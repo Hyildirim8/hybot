@@ -154,6 +154,11 @@ services:
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
       - ./src/ecza_description/launch/hardware.launch.py:/ws/install/share/ecza_description/launch/hardware.launch.py:ro
+      # hardware.launch.py bunu executable="wheel_bridge.py" ile çalıştırıyor,
+      # yani gerçekten koşan kopya lib/ altındaki. Mount edilmezse buradaki
+      # düzenlemeler ancak image rebuild ile devreye girer (urdf ve launch
+      # için zaten aynı desen kullanılıyor).
+      - ./src/ecza_description/scripts/wheel_bridge.py:/ws/install/lib/ecza_description/wheel_bridge.py:ro
       - ./src/ecza_description/scripts/wheel_bridge.py:/ws/install/lib/ecza_description/wheel_bridge.py:ro
     command: >
       ros2 launch ecza_description hardware.launch.py
