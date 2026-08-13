@@ -134,12 +134,59 @@
     # interprets real forward motion as yaw/strafe.
     command_direction_signs: [-1.0, 1.0, -1.0, 1.0]
     state_direction_signs: [-1.0, 1.0, -1.0, 1.0]
+    # Sol/sağ encoder dengesizliği düzeltmesi — [FL, FR, RL, RR].
+    #
+    # 2026-08-13, temiz 3 m düz sürüş, ham /wheel_velocities (işaret
+    # düzeltilmiş, ölçeklenmemiş):
+    #     FL  95.44   FR 116.37   RL  95.33   RR 114.31 rad
+    #     sol 95.39   sağ 115.34   →  sağ/sol = 1.209
+    # Aynı sürüşte KOMUT dengeliydi (sol 103.12 / sağ 107.75 = 1.045), yani
+    # dört teker fiziksel olarak birlikte döndü ve fark ölçümde.
+    #
+    # Bu dengesizlik /odom'daki sahte dönüşün TEK kaynağıydı: mecanum yaw
+    # formülü wz ~ (-FL + FR - RL + RR) olduğu için sol/sağ farkı doğrudan
+    # yöne entegre oluyor. 2 m'lik bir sürüşte encoder +29.0° derken rf2o
+    # -5.1° ölçmüştü; ölçülen dengesizliği formüle koyunca +30.3° çıkıyor.
+    # odom_angular_scale: 0.85 bunu düzeltmiyor, sadece üstünü örtüyordu.
+    #
+    # Katsayılar iki tarafı ortalamaya eşitler; TOPLAM korunur, dolayısıyla
+    # odom_linear_scale kalibrasyonunu bozmaz (ikisi bağımsız).
+    state_scale_factors: [1.1046, 0.9135, 1.1046, 0.9135]
     command_deadband_rad_s: 0.12
     # Real rover is moving less than odom/RViz reports, especially in yaw.
     # Scale encoder-derived odom before ros2_control integrates it.
-    odom_linear_scale: 0.50
+    # 0.50 -> 0.650. İLK KEZ METREYLE ÖLÇÜLDÜ (2026-08-13), tahmin değil.
+    # İki bağımsız şeritmetre ölçümü, saatler arayla, farklı mesafe ve farklı
+    # o-anki ölçekle alındı ve %1.2 içinde uyuştu:
+    #     sürüş 1: gerçek 1.00 m, /odom 0.764 m (ölçek 0.50)  → 0.654
+    #     sürüş 8: gerçek 3.15 m, /odom 3.331 m (ölçek 0.683) → 0.646
+    #     ortalama → 0.650
+    # Aradaki bir ölçüm 0.711 vermişti ama orada mesafe şeritmetreyle değil
+    # tahminle bildirilmişti; ölçülen ikisi alındı.
+    #
+    # state_scale_factors düzeltmesi bu kalibrasyonu bozmaz: sol/sağ katsayıları
+    # ortalamayı koruyacak şekilde seçildi, ham oran 1.209'dan 1.35'e kadar
+    # sapsa bile toplamdaki değişim %0.5'in altında kalıyor.
+    #
+    # PATİNAJ bu değerin içinde: her iki ölçümde de zeminde kayma oldu, yani
+    # ~%5'lik pay tekerin boşa dönmesinden geliyor ve ZEMİNE BAĞLI. Farklı bir
+    # yüzeyde encoder az okuyacaktır. Patinaj encoder odometrisinin doğasında
+    # olan bir sınır; tek gerçek çözümü lazer/harita düzeltmesidir.
+    #
+    # rf2o REFERANS OLARAK KULLANILMADI: yavaş sürüşte isabetli (1 m'de +%4.8)
+    # ama hızlandıkça sistematik az okuyor (3 m'de -%34, 3.15 m'de -%55).
+    # Scan-matching range-flow yerel doğrusallaştırma yaptığı için taramalar
+    # arası yer değiştirme büyüdükçe hareketi eksik tahmin ediyor. Kalibrasyon
+    # yalnızca şeritmetre ölçümlerine dayanıyor.
+    odom_linear_scale: 0.650
     odom_lateral_scale: 0.50     # lateral odom gerçek sağ/sol hareketle aynı yönde kalsın
-    odom_angular_scale: 0.85     # 0.50 çok yüksekti → harita bozuluyordu; 0.25 daha güvenli başlangıç
+    # UYARI: bu değer artık ölçülmemiş bir kalıntı. 0.85, state_scale_factors
+    # ile giderilen sol/sağ dengesizliğinin ürettiği sahte dönüşü bastırmak
+    # için konmuştu. Dengesizlik kaynağında düzeldiğine göre buradaki doğru
+    # değer büyük ihtimalle 1.0'a yakın — ama YERİNDE DÖNÜŞ TESTİ yapılmadan
+    # bilinemez (2 tam tur, gerçek açıyla karşılaştır). Test edilene kadar
+    # 0.85 bırakıldı; en azından bilinen bir başlangıç noktası.
+    odom_angular_scale: 0.85
     odom_linear_deadband: 0.02
     odom_lateral_deadband: 0.0
     odom_angular_deadband: 0.05

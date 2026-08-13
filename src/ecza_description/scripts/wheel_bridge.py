@@ -45,6 +45,11 @@ DEFAULT_COMMAND_DIR_SIGN = [-1.0, 1.0, -1.0, 1.0]
 # through unchanged by default. This keeps /odom and RViz aligned with reality.
 DEFAULT_STATE_DIR_SIGN = [1.0, 1.0, 1.0, 1.0]
 
+# Per-wheel gain on reported encoder velocity. Neutral by default; set in
+# config/rover_params.yaml from a measured straight run. See the
+# state_scale_factors declaration below for the measurement and rationale.
+DEFAULT_STATE_SCALE = [1.0, 1.0, 1.0, 1.0]
+
 # Seconds without real ESP32 data before state is considered stale
 ESP32_TIMEOUT = 1.0
 
@@ -90,6 +95,29 @@ class WheelBridge(Node):
         self.declare_parameter("command_deadband_rad_s", CMD_DEADBAND_RAD_S)
         self.declare_parameter("command_direction_signs", DEFAULT_COMMAND_DIR_SIGN)
         self.declare_parameter("state_direction_signs", DEFAULT_STATE_DIR_SIGN)
+        # Per-wheel gain on the ESP32's reported velocity, applied after the
+        # sign correction. Separate from state_direction_signs because
+        # _normalise_signs() deliberately collapses every value to exactly
+        # +/-1.0, so a scale factor cannot be smuggled in there.
+        #
+        # Why this exists: on a straight drive all four mecanum wheels must
+        # turn at the same rate, but the encoders disagree left vs right.
+        # Measured 2026-08-13 over a clean 3 m straight run (raw topic,
+        # sign-corrected, pre-scaling):
+        #     FL  95.44   FR 116.37   RL  95.33   RR 114.31  rad
+        #     left 95.39  right 115.34  ->  right/left = 1.209
+        # The commands for the same run were balanced (left 103.12 vs right
+        # 107.75, ratio 1.045) and rf2o put the heading change at -5.1 deg
+        # over 2 m, so the robot really did go straight and the wheels really
+        # did turn together — the disagreement is in the measurement.
+        #
+        # That imbalance is the entire source of the phantom yaw in /odom:
+        # mecanum yaw is wz ~ (-FL + FR - RL + RR), so a left/right offset
+        # integrates directly into heading. On an earlier 2 m run the encoder
+        # claimed +29.0 deg while rf2o measured -5.1 deg, and feeding the
+        # measured imbalance through the yaw formula predicts +30.3 deg.
+        # odom_angular_scale was masking this, not fixing it.
+        self.declare_parameter("state_scale_factors", DEFAULT_STATE_SCALE)
         self.declare_parameter("wheel_radius", 0.08)
         self.declare_parameter("wheel_base", 0.38)
         self.declare_parameter("wheel_separation_width", 0.26)
@@ -112,6 +140,10 @@ class WheelBridge(Node):
         self._state_dir_signs = self._normalise_signs(
             self.get_parameter("state_direction_signs").value,
             DEFAULT_STATE_DIR_SIGN,
+        )
+        self._state_scales = self._normalise_scales(
+            self.get_parameter("state_scale_factors").value,
+            DEFAULT_STATE_SCALE,
         )
         self._wheel_radius = float(self.get_parameter("wheel_radius").value)
         self._wheel_base = float(self.get_parameter("wheel_base").value)
@@ -186,6 +218,24 @@ class WheelBridge(Node):
                 item = default
             signs.append(-1.0 if item < 0.0 else 1.0)
         return signs
+
+    @staticmethod
+    def _normalise_scales(value, fallback: list[float]) -> list[float]:
+        """Like _normalise_signs but keeps magnitude — that is the whole point.
+
+        Only the sign is dropped (direction belongs to state_direction_signs)
+        and non-positive or unparseable entries fall back to the default, so a
+        typo cannot silently zero out a wheel's feedback.
+        """
+        raw = list(value) if isinstance(value, (list, tuple)) else []
+        scales = []
+        for index, default in enumerate(fallback):
+            try:
+                item = abs(float(raw[index]))
+            except (IndexError, TypeError, ValueError):
+                item = default
+            scales.append(item if item > 0.0 else default)
+        return scales
 
     def _make_joint_state(self, velocities: list) -> JointState:
         js = JointState()
@@ -285,7 +335,7 @@ class WheelBridge(Node):
         data = list(msg.data) if msg.data else []
         data = (data + [0.0] * 4)[:4]
         data = [
-            data[i] * self._state_dir_signs[i]
+            data[i] * self._state_dir_signs[i] * self._state_scales[i]
             for i in range(4)
         ]
         data = self._scale_state_for_odometry(data)
