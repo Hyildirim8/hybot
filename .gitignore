@@ -45,3 +45,7 @@ Thumbs.db
 *.tmp
 EDS_Bot-main
 EDS_Bot-main.zip
+
+# ── Third-party vendored code ────────────────────────────────────────────────
+linorobot2-humble/
+linorobot2-humble.zip
