@@ -17,25 +17,37 @@ SHELL ["/bin/bash", "-c"]
 
 WORKDIR /ws
 
+# ── rf2o_laser_odometry (built from source — no arm64 apt package) ──────────
+# Laser-scan odometry. Fused into the EKF as an absolute x/y/yaw source so the
+# state estimate no longer depends on the (known-miscalibrated) wheel encoders.
+# Same arrangement MentorPi uses: driver/controller/config/ekf.yaml there has
+# odom0=odom_raw (encoder velocities) + odom1=odom_rf2o (laser pose).
+#
+# The sed patch is REQUIRED, not cosmetic. rf2o only processes scans while
+# GT_pose_initialized is true, and that flag starts false whenever
+# init_pose_from_topic is non-empty — it only flips after one message arrives
+# on that topic. The upstream default is "/base_pose_ground_truth", which
+# nothing in this stack publishes, so rf2o silently discards every scan and
+# logs "Waiting for laser_scans" forever. rcl rejects an empty value in
+# `-p name:=`, so the default has to be fixed at compile time.
+#
+# Cloned BEFORE `COPY src/` so this layer stays cached when workspace sources
+# change (COPY merges into src/, it does not replace the directory).
+RUN git clone --depth 1 --branch ros2 \
+        https://github.com/MAPIRlab/rf2o_laser_odometry.git \
+        src/rf2o_laser_odometry && \
+    sed -i 's|"init_pose_from_topic", "/base_pose_ground_truth"|"init_pose_from_topic", ""|' \
+        src/rf2o_laser_odometry/src/CLaserOdometry2DNode.cpp && \
+    grep -q '"init_pose_from_topic", ""' \
+        src/rf2o_laser_odometry/src/CLaserOdometry2DNode.cpp
+
 # Copy source packages so rosdep can inspect package.xml files.
 # src/ may be empty during initial scaffold; a placeholder keeps the COPY valid.
 COPY src/ src/
 
-# rf2o_laser_odometry is not in the humble apt repo for arm64 — clone from source.
-# Pinned to a known-good commit for reproducible builds.
-RUN apt-get update -qq && \
-    apt-get install -y --no-install-recommends git && \
-    git clone --depth 1 https://github.com/MAPIRlab/rf2o_laser_odometry.git \
-        src/rf2o_laser_odometry && \
-    rm -rf /var/lib/apt/lists/* && \
-    # Default init_pose_from_topic is "/base_pose_ground_truth", which makes rf2o
-    # wait for a ground-truth odometry message before processing any scan — it never
-    # arrives in our setup. Patch the default to "" so GT_pose_initialized=true from
-    # the start, matching the behaviour of -p init_pose_from_topic:="" at runtime
-    # (rcl rejects empty-value params, so compile-time patch is the only clean way).
-    sed -i 's|declare_parameter<std::string>("init_pose_from_topic", "/base_pose_ground_truth")|declare_parameter<std::string>("init_pose_from_topic", "")|' \
-        src/rf2o_laser_odometry/src/CLaserOdometry2DNode.cpp
-
+# cmake_modules skip-key: rf2o declares it but it is not packaged for Humble;
+# the CMake config it wants (FindEigen) is provided by the eigen3_cmake_module
+# that ships with the ROS 2 desktop deps already present in this base image.
 RUN apt-get update -qq && \
     rosdep update --rosdistro humble && \
     rosdep install \
@@ -79,8 +91,7 @@ COPY --from=build /ws/install /ws/install
 # kisak-mesa PPA: rviz2 (the only GL/Mesa consumer in this image) hits a
 # reproducible "libGL error: failed to create drawable" -> SIGSEGV with
 # Ubuntu 22.04's stock Mesa 23.2.1 under both llvmpipe and the RPi5's real
-# V3D driver. The host itself runs Mesa 25.0.7 (Debian Trixie) without
-# this issue — ROS2 Humble requires staying on Ubuntu 22.04, so we can't
+# V3D driver. ROS2 Humble requires staying on Ubuntu 22.04, so we can't
 # rebase the whole image, but a newer Mesa can be layered on top via this
 # well-established backport PPA. Only affects rviz (no other service uses
 # GL), so low risk to the rest of the stack.
@@ -100,6 +111,8 @@ RUN apt-get update -qq && \
 # rplidar-ros:          RPLidar A2M12 driver (lidar service)
 # nav2:                 autonomous navigation stack (navigation service)
 # slam-toolbox:         online SLAM for map building
+# robot-localization:   EKF sensor fusion (encoder odom + IMU gyro) for ekf service
+# python3-smbus/i2c-tools: GY-85 IMU driver (imu service) reads over I2C
 RUN apt-get update -qq && \
     apt-get install -y --no-install-recommends \
         ros-humble-joy \
@@ -134,12 +147,10 @@ RUN apt-get update -qq && \
         ros-humble-navigation2 \
         ros-humble-nav2-bringup \
         ros-humble-nav2-rviz-plugins \
-        ros-humble-nav2-mppi-controller \
         ros-humble-slam-toolbox \
         ros-humble-robot-localization \
         python3-smbus \
         i2c-tools \
-        python3-serial \
         # Xvfb + x11vnc: self-contained virtual X server for rviz2,
         # bypassing the host's XWayland/labwc compositor entirely. That
         # path had a persistent, unfixable "failed to create drawable"

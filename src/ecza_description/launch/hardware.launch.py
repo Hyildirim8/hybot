@@ -82,14 +82,36 @@ def generate_launch_description() -> LaunchDescription:
             # Remap odometry topic so Nav2, SLAM Toolbox and other nodes
             # that subscribe to the standard /odom topic receive it.
             ("/controller_manager/odometry", "/odom"),
+            # Remap mecanum_drive_controller's reference_unstamped subscription
+            # to /cmd_vel so teleop_node's Twist commands actually reach it.
+            # Without this, teleop only ever talks to an unconnected topic and
+            # the wheels never move (reference_velocity stays zero).
+            ("/controller_manager/reference_unstamped", "/cmd_vel"),
         ],
     )
 
     # ── Spawn joint_state_broadcaster (immediate) ─────────────────────────
+    # controller-manager-timeout raised from the 10s default: on the Pi,
+    # ros2_control_node's first load_controller call can take >10s while
+    # resource_manager/RT-thread setup is still competing for CPU with the
+    # other containers restarting at the same time. With the 10s default the
+    # spawner CLI times out and fires a second load_controller call while the
+    # first is still in flight; controller_manager then rejects the second
+    # call as "already loaded" and the spawner exits fatally, leaving the
+    # controller stuck in 'unconfigured' forever (nothing else activates it).
+    # No respawn here: spawner is a one-shot load+configure+activate utility
+    # that exits 0 on success. respawn=True was tried and made it worse — it
+    # relaunched spawner after every clean exit too, and the second run tried
+    # to configure an already-active controller, which ros2_control rejects,
+    # so it crash-looped forever instead of just running once.
     spawn_jsb = Node(
         package="controller_manager",
         executable="spawner",
-        arguments=["joint_state_broadcaster", "--controller-manager", "/controller_manager"],
+        arguments=[
+            "joint_state_broadcaster",
+            "--controller-manager", "/controller_manager",
+            "--controller-manager-timeout", "60",
+        ],
         output="screen",
     )
 
@@ -111,6 +133,7 @@ def generate_launch_description() -> LaunchDescription:
             arguments=[
                 "mecanum_drive_controller",
                 "--controller-manager", "/controller_manager",
+                "--controller-manager-timeout", "60",
             ],
             output="screen",
         )],

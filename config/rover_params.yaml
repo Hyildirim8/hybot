@@ -34,8 +34,18 @@
     #   5 = D-pad Y         (up=+1,   down=-1)
     # Buttons (12 total):
     #   0=X   1=A   2=B   3=Y
-    #   4=LB  5=RB  6=LT  7=RT
+    #   4=LB(dead-man alt)  5=RB(dead-man)  6=LT(sağ taraf pivot)  7=RT(sol taraf pivot)
     #   8=Back  9=Start  10=L3  11=R3
+    #
+    # Pivot hareketleri (LT/RT/D-pad): 4 tekerden sadece bir çifti hareket eder,
+    # diğer çift tam sıfırda kalır (yerinde dönüş DEĞİL, tek taraf/aks pivotu).
+    # 2026-08-01: yönler ters bildirilmişti (ilk yazımda), çevrildi:
+    #   LT          → sağ taraf (FR+RR) ileri, sol taraf sabit → geniş sola dönüş
+    #   RT          → sol taraf (FL+RL) ileri, sağ taraf sabit → geniş sağa dönüş
+    #   D-pad sol   → arka aks: RR ileri / RL geri, ön aks sabit
+    #   D-pad sağ   → arka aks: RL ileri / RR geri, ön aks sabit
+    #   D-pad yukarı→ ön aks: FR ileri / FL geri, arka aks sabit
+    #   D-pad aşağı → ön aks: FL ileri / FR geri, arka aks sabit
     joy_deadzone: 0.05             # [0, 1) — smoother low-speed stick response
     axis_linear_x: 1               # left  stick Y — forward / backward
     axis_linear_y: 0               # left stick X: right=+1 from joystick, ROS right strafe must be -Y
@@ -50,10 +60,21 @@
     enable_button: 5               # RB — dead-man switch
     enable_button_alt: 4           # LB — alternate dead-man for mode compatibility
     require_enable_button: false   # manuel modda RB/LB basmadan sürüş aktif
-    btn_strafe_left: 6             # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
-    btn_strafe_right: 7            # tam sol/sağ buton yönü gerçek hareketle eşleşsin diye çevrildi
-    strafe_invert: true            # manuel strafe: sağ komut gerçek sağ/RViz sağ ile eşleşsin
-    auto_strafe_invert: false      # Nav2/slam_manager uses ROS convention (+y=left); mecanum_drive_controller also uses vy>0=left — no flip needed.
+    axis_dpad_x: 4                 # D-pad sol/sağ — arka aks pivotu (yukarıdaki tabloya bak)
+    axis_dpad_y: 5                 # D-pad yukarı/aşağı — ön aks pivotu (yukarıdaki tabloya bak)
+    btn_pivot_left: 6              # LT — sadece sağ taraf tekerleri ileri (geniş dönüş, 2026-08-01 ters çevrildi)
+    btn_pivot_right: 7             # RT — sadece sol taraf tekerleri ileri (geniş dönüş, 2026-08-01 ters çevrildi)
+    pivot_wheel_speed_rad_s: 10.0  # aktif teker çifti hedef hızı; firmware MAX_SPEED_RAD_S=18.75'i satüre etmesin diye düşük tutuldu
+    strafe_invert: false           # manuel strafe: hem manuel hem rvizde ters bildirildi, false'a geri alındı (2026-08-01)
+    auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
+    # Index 9 IS Start on this pad. Do not "fix" it to 11 again: that was tried
+    # on 2026-08-11 because `jstest` prints the button list as
+    # A,B,C,X,Y,Z,TL,TR,TL2,TR2,Select,Start — but those are just the evdev
+    # keycodes joydev hands out in order, NOT the F710's physical layout. The
+    # F710 in DirectInput mode reports 0-3=face, 4=LB, 5=RB, 6=LT, 7=RT,
+    # 8=Back, 9=Start, 10=L3, 11=R3 — consistent with btn_pivot_left/right
+    # below being LT/RT at 6/7. Setting this to 11 binds mode toggle to the
+    # right stick click, so pressing Start does nothing at all.
     btn_auto_mode: 9               # Start toggles TELEOP <-> AUTONOMOUS (Nav2)
     btn_auto_mode_alt: -1          # no alternate toggle
     btn_auto_mode_candidates: [9]  # only Start toggles TELEOP <-> AUTO
@@ -123,19 +144,88 @@
     # interprets real forward motion as yaw/strafe.
     command_direction_signs: [-1.0, 1.0, -1.0, 1.0]
     state_direction_signs: [-1.0, 1.0, -1.0, 1.0]
+    # Sol/sağ encoder dengesizliği düzeltmesi — [FL, FR, RL, RR].
+    #
+    # 2026-08-13, temiz 3 m düz sürüş, ham /wheel_velocities (işaret
+    # düzeltilmiş, ölçeklenmemiş):
+    #     FL  95.44   FR 116.37   RL  95.33   RR 114.31 rad
+    #     sol 95.39   sağ 115.34   →  sağ/sol = 1.209
+    # Aynı sürüşte KOMUT dengeliydi (sol 103.12 / sağ 107.75 = 1.045), yani
+    # dört teker fiziksel olarak birlikte döndü.
+    #
+    # MEKANİZMA — encoder ölçek hatası DEĞİL. Aynı gün yapılan yerinde dönüş
+    # testinde aynı ham topic sol/sağ |oran| = 0.9915 verdi, yani dönüşte
+    # tekerler dengeli. Encoder'ların kendisinde ölçek hatası olsaydı her iki
+    # harekette de görünürdü. Görünmediğine göre sebep DÜZ SÜRÜŞE ÖZGÜ
+    # ASİMETRİK PATİNAJ (muhtemelen makara yönelimi/hizası — bkz. daha önceki
+    # mekanik makara sorunu).
+    #
+    # Sonuç: aşağıdaki katsayılar semptomu doğru düzeltiyor (doğrulandı: 3 m'de
+    # +29.0 deg -> -1.1 deg) ama ZEMİNE VE HIZA BAĞLI. Farklı bir yüzeyde
+    # yeniden ölçmek gerekebilir. Kalıcı çözüm mekanik tarafta.
+    #
+    # Bu dengesizlik /odom'daki sahte dönüşün TEK kaynağıydı: mecanum yaw
+    # formülü wz ~ (-FL + FR - RL + RR) olduğu için sol/sağ farkı doğrudan
+    # yöne entegre oluyor. 2 m'lik bir sürüşte encoder +29.0° derken rf2o
+    # -5.1° ölçmüştü; ölçülen dengesizliği formüle koyunca +30.3° çıkıyor.
+    # odom_angular_scale: 0.85 bunu düzeltmiyor, sadece üstünü örtüyordu.
+    #
+    # Katsayılar iki tarafı ortalamaya eşitler; TOPLAM korunur, dolayısıyla
+    # odom_linear_scale kalibrasyonunu bozmaz (ikisi bağımsız).
+    state_scale_factors: [1.1046, 0.9135, 1.1046, 0.9135]
     command_deadband_rad_s: 0.12
     # Real rover is moving less than odom/RViz reports, especially in yaw.
     # Scale encoder-derived odom before ros2_control integrates it.
-    odom_linear_scale: 0.50
+    # 0.50 -> 0.650. İLK KEZ METREYLE ÖLÇÜLDÜ (2026-08-13), tahmin değil.
+    # İki bağımsız şeritmetre ölçümü, saatler arayla, farklı mesafe ve farklı
+    # o-anki ölçekle alındı ve %1.2 içinde uyuştu:
+    #     sürüş 1: gerçek 1.00 m, /odom 0.764 m (ölçek 0.50)  → 0.654
+    #     sürüş 8: gerçek 3.15 m, /odom 3.331 m (ölçek 0.683) → 0.646
+    #     ortalama → 0.650
+    # Aradaki bir ölçüm 0.711 vermişti ama orada mesafe şeritmetreyle değil
+    # tahminle bildirilmişti; ölçülen ikisi alındı.
+    #
+    # state_scale_factors düzeltmesi bu kalibrasyonu bozmaz: sol/sağ katsayıları
+    # ortalamayı koruyacak şekilde seçildi, ham oran 1.209'dan 1.35'e kadar
+    # sapsa bile toplamdaki değişim %0.5'in altında kalıyor.
+    #
+    # PATİNAJ bu değerin içinde: her iki ölçümde de zeminde kayma oldu, yani
+    # ~%5'lik pay tekerin boşa dönmesinden geliyor ve ZEMİNE BAĞLI. Farklı bir
+    # yüzeyde encoder az okuyacaktır. Patinaj encoder odometrisinin doğasında
+    # olan bir sınır; tek gerçek çözümü lazer/harita düzeltmesidir.
+    #
+    # rf2o REFERANS OLARAK KULLANILMADI: yavaş sürüşte isabetli (1 m'de +%4.8)
+    # ama hızlandıkça sistematik az okuyor (3 m'de -%34, 3.15 m'de -%55).
+    # Scan-matching range-flow yerel doğrusallaştırma yaptığı için taramalar
+    # arası yer değiştirme büyüdükçe hareketi eksik tahmin ediyor. Kalibrasyon
+    # yalnızca şeritmetre ölçümlerine dayanıyor.
+    odom_linear_scale: 0.650
     odom_lateral_scale: 0.50     # lateral odom gerçek sağ/sol hareketle aynı yönde kalsın
-    odom_angular_scale: 0.85     # 0.50 çok yüksekti → harita bozuluyordu; 0.25 daha güvenli başlangıç
+    # 0.85 -> 0.504. ÖLÇÜLDÜ (2026-08-13): yerinde 2 tam tur (720 deg gerçek),
+    # /odom -1215.4 deg bildirdi. Ham (ölçeksiz) dönüş 1215.4/0.85 = 1430.0 deg,
+    # dolayısıyla 720/1430.0 = 0.504. Ham tekerlerden bağımsız doğrulama:
+    # wz ~ (r/4k)(-FL+FR-RL+RR) = -1265 deg hesap vs -1215 deg ölçüm (%4).
+    #
+    # Neden 1'den bu kadar uzak: mecanumda YERİNDE DÖNÜŞ devasa patinaj
+    # demektir — dört teker de yana sürtünür. Encoder'ın %69 fazla okuması
+    # fiziksel, bir hata değil.
+    #
+    # SINIR: bu yüzden tek bir açısal ölçek her harekette doğru olamaz.
+    # Yerinde dönüşteki patinaj ile yay çizerek dönerkenki patinaj farklıdır;
+    # 0.504 yerinde dönüşe göre kalibre edildi, yaylarda bir miktar az
+    # okuyacaktır. Nav2 çoğunlukla yay çizdiği için, otonom sürüşte açısal
+    # sapma görülürse önce burayı değil bu uzlaşmayı hatırla.
+    odom_angular_scale: 0.504
     odom_linear_deadband: 0.02
     odom_lateral_deadband: 0.0
     odom_angular_deadband: 0.05
 
     # ── Watchdog timeouts ─────────────────────────────────────────────────────
     # Two distinct watchdogs — do not conflate them.
-    joy_watchdog_timeout_ms: 500        # ms — avoids false zeroing from brief /joy jitter
+    # 500 -> 1000: remote joystick over Wi-Fi hit normal network jitter well
+    # under 1s that the local wired joystick never would, tripping false
+    # zeroing/"kilitlenme" during teleop. 1000ms still fails safe quickly.
+    joy_watchdog_timeout_ms: 1000       # ms — avoids false zeroing from brief /joy jitter
     firmware_watchdog_timeout_ms: 500   # ms — ESP32 stops motors on /wheel_velocities silence
                                         # (informational here; firmware reads from NVS)
 

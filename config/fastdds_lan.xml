@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  fastdds_lan.xml — LAN-visible Fast-DDS profile.
+
+  Identical to fastdds_udp.xml except that it does NOT set
+  <ignoreParticipantFlags>FILTER_DIFFERENT_HOST</ignoreParticipantFlags>, so
+  DDS participants on other machines can discover the robot and be discovered
+  by it. Use it only when something off-robot genuinely needs to speak DDS —
+  in practice that means the PC-side RViz viewer (scripts/rviz_viewer_pc.sh).
+
+  Select it per-launch, do not make it the default:
+
+      DDS_PROFILE=fastdds_lan.xml bash scripts/launch.sh --nav --lidar
+      bash scripts/launch.sh --nav --lidar --lan        # same thing
+
+  TRADE-OFF, know it before using this: the default profile's host filter is
+  what keeps a foreign robot on this LAN (it publishes /robot_description,
+  /joy and /tf as vision_bot_urdf / vision_arm_controller) out of domain 0.
+  Dropping the filter lets it back in, and it competes with our own publishers
+  — RViz can latch its URDF and render nothing but "Package [vision_bot_urdf]
+  does not exist", and it adds a third publisher to /joy. So run in LAN mode
+  only while you actually need the PC viewer, then go back to the default.
+
+  Do NOT "fix" the foreign device by adding an interfaceWhiteList here or by
+  changing ROS_DOMAIN_ID — both silently kill the ESP32 motor bridge. See the
+  comments in fastdds_udp.xml and .env for the measurements behind that.
+
+  Note that remote teleop and the camera stream do NOT need this profile:
+  remote_teleop_client.py talks newline-delimited JSON over plain TCP (9092)
+  and the camera streams over UDP, neither of which is DDS traffic.
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_disabled</transport_id>
+      <type>UDPv4</type>
+    </transport_descriptor>
+  </transport_descriptors>
+
+  <participant profile_name="participant_profile" is_default_profile="true">
+    <rtps>
+      <userTransports>
+        <transport_id>shm_disabled</transport_id>
+      </userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

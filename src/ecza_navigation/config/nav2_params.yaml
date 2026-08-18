@@ -27,8 +27,7 @@ amcl:
     beam_skip_error_threshold: 0.9
     beam_skip_threshold: 0.3
     do_beamskip: false
-    lambda_slow: 0.001
-    lambda_fast: 0.1
+    lambda_short: 0.1
     laser_likelihood_max_dist: 2.0
     laser_max_range: 12.0
     laser_min_range: 0.15
@@ -38,7 +37,9 @@ amcl:
     min_particles: 500
     # Mecanum base is holonomic; using the omni motion model avoids AMCL
     # over-trusting differential-drive assumptions during strafing / rotation.
-    odom_model_type: "omni"
+    # (odom_model_type is a pre-Humble AMCL param and no longer exists —
+    # verified against nav2_amcl/src/amcl_node.cpp on the humble branch;
+    # robot_model_type below is the real Humble-era plugin selector.)
     pf_err: 0.05
     pf_z: 0.99
     recovery_alpha_fast: 0.0
@@ -69,6 +70,9 @@ bt_navigator:
     odom_topic: /odometry/filtered
     bt_loop_duration: 100
     default_server_timeout: 10000
+    wait_for_service_timeout: 1000
+    # error_code_names is an Iron/Jazzy+ bt_navigator param — not declared by
+    # nav2_bt_navigator on Humble (verified against source), so it was dropped.
     navigators: ["navigate_to_pose", "navigate_through_poses"]
     # Costmap-temizlemeli recovery ağacı: tek planlama/takip hatasında hedefi
     # düşürmek yerine costmap'leri temizleyip yeniden dener (fiziksel spin yok —
@@ -92,7 +96,10 @@ bt_navigator:
       - nav2_compute_path_through_poses_action_bt_node
       - nav2_follow_path_action_bt_node
       - nav2_remove_passed_goals_action_bt_node
-      - nav2_back_up_action_bt_node
+      # Costmap temizleme recovery'si için eklendi (bkz. iki BT xml dosyası).
+      # Fiziksel hareket YOK — Spin/BackUp node'ları bilerek kayıtlı değil.
+      - nav2_recovery_node_bt_node
+      - nav2_clear_costmap_service_bt_node
 
 controller_server:
   ros__parameters:
@@ -101,13 +108,25 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001     # non-zero: mecanum can strafe
     min_theta_velocity_threshold: 0.001
-    failure_tolerance: 4.0    # MPPI rarely hard-fails; give it time before slam_manager fallback
-    progress_checker_plugins: ["progress_checker"]
+    # 5.0 -> 1.0. Bu, controller geçerli bir komut üretemediğinde robotun SON
+    # komutla ne kadar süre sürmeye devam edeceği. 5 saniye, 0.75 m/s'de ~3.7
+    # metre KÖR sürüş demek — otonom modda doğrudan çarpma sebebi. Costmap ve
+    # DWB transform_tolerance değerleri de 1.0'a çekildi, dolayısıyla TF
+    # gecikmesine karşı tampon hâlâ var. MentorPi 0.3 kullanıyor.
+    failure_tolerance: 1.0
+    # Humble'da parametrenin adı TEKİL: progress_checker_plugin.
+    # Çoğul biçim (progress_checker_plugins) Iron ile geldi; burada
+    # tanımlanmadığı için sessizce yok sayılıyordu. Canlı doğrulama:
+    # `ros2 param list /controller_server | grep progress` -> yalnızca
+    # `progress_checker_plugin` çıkıyor. Varsayılan id de "progress_checker"
+    # olduğu için aşağıdaki alt-blok şans eseri uygulanıyordu; yine de
+    # yapılandırmanın gerçekten okunduğu bir isim kullanılıyor.
+    progress_checker_plugin: "progress_checker"
     goal_checker_plugins: ["general_goal_checker"]
     controller_plugins: ["FollowPath"]
-    # EKF (encoder+IMU fusion, see ekf.yaml) — bt_navigator already reads this;
-    # MPPI's current-speed estimate for rollouts should too, not raw wheel-only /odom.
-    odom_topic: "/odometry/filtered"
+    odom_topic: "odom"
+    # use_realtime_priority is not declared by nav2_controller on Humble
+    # (added in a later distro) — verified against source, dropped.
 
     progress_checker:
       plugin: "nav2_controller::SimpleProgressChecker"
@@ -131,92 +150,94 @@ controller_server:
     # 600x18 (~55% fewer rollouts) frees real headroom with minimal quality
     # loss at this robot's speed/size.
     FollowPath:
-      plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 18
-      model_dt: 0.17          # must be >= 1/controller_frequency (1/6 ≈ 0.167)
-      batch_size: 600
-      vx_std: 0.45             # wider sampling → more high-speed / escape trajectories explored
-      vy_std: 0.35             # wider lateral sampling → better tight-corridor threading
-      wz_std: 0.4
-      vx_max:  1.0             # was 0.75 — rover does 1.5 m/s; 1.0 is safe for Nav2
-      vx_min: -0.30
-      vy_max:  0.50
-      vy_min: -0.50
-      wz_max:  0.65
-      iteration_count: 1
-      prune_distance: 1.7
-      transform_tolerance: 4.0
-      temperature: 0.5         # was 0.3 — more exploration diversity, less warm-start bias on new goals
-      gamma: 0.015
-      motion_model: "Omni"     # holonomic: samples vx + vy + wz trajectories
-      visualize: false
-      reset_period: 0.3        # was 1.0 — clears stale warm-start trajectory within 2 control cycles
-      critics: ["ConstraintCritic", "CostCritic", "GoalCritic",
-                "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
-                "PathAngleCritic", "PreferForwardCritic"]
-      ConstraintCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 4.0
-      GoalCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 5.0
-        threshold_to_consider: 1.4
-      GoalAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 3.0
-        threshold_to_consider: 0.5
-      PreferForwardCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 2.0        # reduced: allow backward escape without large penalty
-        threshold_to_consider: 0.5
-      CostCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 3.81
-        critical_cost: 252.0    # only penalize inscribed/lethal zone; allows paths through inflation (tight corridors)
-        consider_footprint: true
-        collision_cost: 100000.0  # lower: not 1M — avoids "all trajectories rejected" in tight corners
-        near_goal_distance: 1.0
-      PathAlignCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 8.0        # was 14.0 — reduced so alignment doesn't dominate progress
-        max_path_occupancy_ratio: 0.10
-        trajectory_point_step: 3
-        threshold_to_consider: 0.5
-        offset_from_furthest: 20
-        use_path_orientations: false
-      PathFollowCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 14.0       # was 5.0 — now the dominant critic; drives fast progress
-        offset_from_furthest: 8  # was 5 — targets further ahead → more momentum
-        threshold_to_consider: 1.4
-      PathAngleCritic:
-        enabled: true
-        cost_power: 1
-        cost_weight: 2.0
-        offset_from_furthest: 4
-        threshold_to_consider: 0.5
-        max_angle_to_furthest: 1.4  # was 1.0 — more aggressive turn toward path target
-        mode: 0
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: false
+      min_vel_x: -0.8
+      min_vel_y: -0.65
+      max_vel_x:  0.75
+      max_vel_y:  0.45
+      max_vel_theta: 0.45
+      min_speed_xy: 0.0
+      max_speed_xy: 0.90
+      min_speed_theta: 0.0
+      acc_lim_x: 1.0
+      acc_lim_y: 0.9
+      acc_lim_theta: 0.40
+      decel_lim_x: -1.2
+      decel_lim_y: -1.0
+      decel_lim_theta: -0.45
+      vx_samples: 8
+      vy_samples: 6
+      vtheta_samples: 6
+      sim_time: 1.2
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      # 4.0 -> 1.0. DWB yörüngeleri odom karesinde değerlendirirken 4 saniyelik
+      # bayat TF kullanmak, robotun 3 metre önce bulunduğu yer için plan yapması
+      # demekti. failure_tolerance ile birlikte düşürüldü.
+      transform_tolerance: 1.0
+      xy_goal_tolerance: 0.08
+      trans_stopped_velocity: 0.05
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+      critics: ["Oscillation", "BaseObstacle", "ObstacleFootprint",
+                "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 4.0
+      ObstacleFootprint.scale: 6.0   # düşürüldü: dar geçişlerde tüm yörüngeleri reddetmiyordu
+      PathAlign.scale: 20.0
+      PathAlign.forward_point_distance: 0.2
+      GoalAlign.scale: 14.0
+      GoalAlign.forward_point_distance: 0.2
+      PathDist.scale: 32.0           # artırıldı: dar geçişlerde planlanan yola sıkı uy
+      GoalDist.scale: 18.0
+
+    # ── RPP Alternative (uncomment to use Regulated Pure Pursuit) ──────────
+    # FollowPath:
+    #   plugin: "nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController"
+    #   desired_linear_vel: 0.5
+    #   lookahead_dist: 0.6
+    #   min_lookahead_dist: 0.3
+    #   max_lookahead_dist: 0.9
+    #   lookahead_time: 1.5
+    #   rotate_to_heading_angular_vel: 1.8
+    #   transform_tolerance: 0.5
+    #   use_velocity_scaled_lookahead_dist: false
+    #   min_approach_linear_velocity: 0.05
+    #   approach_velocity_scaling_dist: 0.6
+    #   use_collision_detection: true
+    #   max_allowed_time_to_collision_up_to_carrot: 1.0
+    #   use_regulated_linear_velocity_scaling: true
+    #   use_cost_regulated_linear_velocity_scaling: false
+    #   regulated_linear_scaling_min_radius: 0.9
+    #   regulated_linear_scaling_min_speed: 0.25
+    #   allow_reversing: false
+    #   use_rotate_to_heading: true
+    #   rotate_to_heading_min_angle: 0.785
+    #   max_angular_accel: 3.2
+    #   max_robot_pose_search_dist: 10.0
 
 local_costmap:
   local_costmap:
     ros__parameters:
       use_sim_time: false
-      update_frequency: 6.0   # at 1.0 m/s robot moves 17 cm between 6 Hz updates — safe margin
+      # 12x12 -> 6x6 sayesinde hücre sayısı 57.6k'dan 14.4k'ya düştü, o yüzden
+      # güncelleme hızı 2.5 -> 4.0'a çıkarılabildi. Local costmap'in görevi
+      # rviz'de manzara göstermek değil, DWB'nin denediği yörüngeleri
+      # kapsamaktır: sim_time 1.2 s x max_speed_xy 0.90 m/s = 1.1 m ileri.
+      # 6x6 (robot etrafında 3 m yarıçap) buna fazlasıyla yeter; 12 m menzilin
+      # tamamı zaten global costmap'te (yukarıda obstacle_layer eklendi) ve
+      # /scan görselleştirmesinde görünüyor.
+      update_frequency: 4.0
       publish_frequency: 2.0
       global_frame: odom
       robot_base_frame: base_link
-      transform_tolerance: 3.0
+      # 3.0 -> 1.0. 3 saniyelik tolerans, 0.75 m/s'de 2.2 metrelik konum
+      # hatasıyla engel işaretlemek demek — engeller costmap'e yanlış yere
+      # çizilir. 1.0 s RPi gecikmesi için hâlâ cömert (MentorPi 0.1 kullanıyor).
+      transform_tolerance: 1.0
       rolling_window: true
-      width: 4
-      height: 4
+      width: 6
+      height: 6
       resolution: 0.05
       # Square footprint matching rover body (0.38 m × 0.26 m) + 1 cm padding
       footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
@@ -224,16 +245,20 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # inflation_radius çevrel yarıçapın (≈0.27 m) ALTINA inerse planner köşeleri
-        # duvara sürtecek yollar çizer — "engelden kaçamama"nın ana nedeni buydu.
-        # Dar geçiş kaygısı cost_scaling_factor ile çözülür: 3.5 hızlı sönüm →
-        # kapı ortasındaki maliyet düşük kalır, DWB geçişi reddetmez.
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.28
+        # global_costmap'teki aynı gerekçe: inflation_radius circumscribed
+        # yarıçaptan (0.258 m) büyük olmalı. Local'de 0.30 yeterli — DWB'nin
+        # ObstacleFootprint kritiği gerçek footprint ile çarpışmayı zaten
+        # kesin olarak kontrol ediyor, burada amaç sadece tutarlı maliyet.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.30
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        tf_filter_tolerance: 5.0  # scan zaman damgası ile TF arasındaki max fark; RPi DDS gecikmesi için artırıldı
+        # tf_filter_tolerance is not a real nav2_costmap_2d::ObstacleLayer param
+        # on Humble (verified against source) — the laser message_filter's TF
+        # wait tolerance is hardcoded to 0.05s in obstacle_layer.cpp on this
+        # distro, not configurable. The costmap-level transform_tolerance: 3.0
+        # above is the real RPi-lag safety margin.
         observation_sources: scan
         scan:
           topic: /scan
@@ -241,9 +266,15 @@ local_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 4.0
+          # 4.0 -> 12.0: temizleme menzili işaretleme menzilinden büyük
+          # olmalı, aksi halde uzaktaki eski engeller hiç silinmez.
+          raytrace_max_range: 12.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 3.0
+          # 3.0 -> 10.0: asıl kesme buydu. Lidar 12 m'ye kadar dönüş veriyor
+          # ama 3 m'den uzaktaki algılamalar engel olarak işaretlenmediği için
+          # rviz'de daire olarak çizilmiyordu. Geçerli dönüşlerin %99'u 10 m
+          # içinde, dolayısıyla 10 m pratikte tüm algılamaları kapsıyor.
+          obstacle_max_range: 10.0
           obstacle_min_range: 0.0
           inf_is_valid: false
       static_layer:
@@ -259,18 +290,37 @@ global_costmap:
       publish_frequency: 0.5
       global_frame: map
       robot_base_frame: base_link
-      transform_tolerance: 3.0
-      # rolling_window=true (12×12 m) robottan ~6 m'den uzak RViz hedeflerini
-      # costmap DIŞINDA bırakıyordu → ComputePathToPose anında başarısız,
-      # "haritada işaretlediğim yere gitmiyor". false: costmap SLAM/AMCL
-      # haritasının tamamını kaplar ve harita büyüdükçe kendiliğinden genişler.
+      transform_tolerance: 1.0   # local_costmap ile aynı gerekçe (3.0 -> 1.0)
+      # Rolling window KAPALI: static_layer, costmap'i gelen /map ile birebir
+      # aynı boyuta ve orijine getirir (resizeMap). Böylece rviz'de costmap ile
+      # harita tam üst üste biner (tek bölge) ve keşif ilerledikçe costmap de
+      # haritayla birlikte büyür — sabit pencerede kalan kırpma sorunu olmaz.
+      #
+      # ÖNKOŞUL: /map geçerli olmalı. Bu ayar bir kez denenip geri alınmıştı;
+      # o sırada scan_restamper'ın slam_angle_downsample=4 ayarı yüzünden
+      # slam_toolbox'a giden taramalar boş geliyor ve /map KALICI olarak 0x0
+      # kalıyordu. static_layer bunu "malformed" diye reddedince costmap
+      # varsayılan orijinde ([0,12]x[0,12]) asılı kalıyor, harita ile robot
+      # rviz'de iki ayrı bölge gibi görünüyordu. slam_angle_downsample=2
+      # düzeltmesinden sonra harita saniyeler içinde oluştuğu için bu mod
+      # artık güvenli; hizasızlık yalnızca ilk /map gelene kadar sürer.
       rolling_window: false
+      # Sadece ilk /map mesajı gelene kadar kullanılan başlangıç boyutu;
+      # sonrasında boyutu static_layer belirler.
+      width: 20
+      height: 20
       footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
       footprint_padding: 0.01
       resolution: 0.05
       track_unknown_space: true
-      # obstacle_layer eklendi: SLAM haritasına henüz işlenmemiş (veya nav
-      # modunda hiç olmayan) engeller de global plana girsin.
+      # obstacle_layer EKLENDİ (2026-08-12). Önceden sadece static + inflation
+      # vardı, yani global planner YALNIZCA /map'i görüyordu. /map ise SLAM'da
+      # 1.5 s'de bir (map_update_interval), nav modunda ise HİÇ güncellenmiyor.
+      # Sonuç: haritada olmayan bir engel (insan, sandalye, açılmış kapı)
+      # planner için görünmezdi — planner tam üstünden geçen bir yol üretiyor,
+      # local planner engeli görüp yolu reddediyor, robot duruyor ve hedef
+      # başarısız oluyordu. MentorPi de global costmap'te obstacle_layer
+      # kullanıyor (navigation/config/nav2_params.yaml).
       plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -278,7 +328,6 @@ global_costmap:
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
-        tf_filter_tolerance: 5.0
         observation_sources: scan
         scan:
           topic: /scan
@@ -286,15 +335,31 @@ global_costmap:
           clearing: true
           marking: true
           data_type: "LaserScan"
-          raytrace_max_range: 4.0
+          # clearing menzili marking menzilinden büyük olmalı, yoksa uzaklaşan
+          # engeller global costmap'te kalıcı hayalet olarak kalır.
+          raytrace_max_range: 12.0
           raytrace_min_range: 0.0
-          obstacle_max_range: 3.0
+          obstacle_max_range: 10.0
           obstacle_min_range: 0.0
           inf_is_valid: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.5
-        inflation_radius: 0.28   # local costmap ile aynı — dar geçiş toleransı için 0.32'den düşürüldü
+        # 0.22 -> 0.35, cost_scaling_factor 2.0 -> 3.0.
+        #
+        # Footprint 0.42 x 0.30 m: inscribed yarıçap 0.15, circumscribed 0.258.
+        # inflation_radius (0.22) circumscribed'ın (0.258) ALTINDAYDI — bu
+        # geçersiz bir yapılandırma: costmap'in daire yaklaşımı ile DWB'nin
+        # gerçek footprint çarpışma testi birbiriyle çelişiyor, planner köşeleri
+        # kesen yollar üretiyor ve controller sonra bunları reddediyordu.
+        #
+        # NOT: inflation_radius geçişleri DARALTMAZ. Sadece inscribed yarıçap
+        # (0.15 m) içindeki hücreler 254/LETHAL olur; onun dışındaki şişirme
+        # navfn için "pahalı ama geçilebilir"dir (navfn yalnızca 254'ü engel
+        # sayar). 0.35, dar kapıları kapatmadan yolu koridor ortasına çeker.
+        # Daha önce 0.35 -> 0.22 indirilmesinin gerekçesi ("min geçiş genişliği
+        # 0.96m") bu yüzden geçerli değildi.
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.35
       always_send_full_costmap: true
 
 map_server:
@@ -334,10 +399,16 @@ smoother_server:
 behavior_server:
   ros__parameters:
     use_sim_time: false
-    local_costmap_topic: local_costmap/costmap_raw
-    global_costmap_topic: global_costmap/costmap_raw
-    local_footprint_topic: local_costmap/published_footprint
-    global_footprint_topic: global_costmap/published_footprint
+    # On Humble, nav2_behaviors::BehaviorServer only declares a single
+    # "costmap_topic"/"footprint_topic" pair (no local_/global_ split — that's
+    # a later-distro addition) and a single "global_frame" (default "odom",
+    # not "map") consumed by TimedBehavior for the local-costmap-relative
+    # behaviors (Spin/BackUp/DriveOnHeading). "local_frame" was never a real
+    # param. Verified against nav2_behaviors/src/behavior_server.cpp on the
+    # humble branch. Values below point at local_costmap either way, so this
+    # is a naming fix, not a behavior change — no impact on "wait" (see below).
+    costmap_topic: local_costmap/costmap_raw
+    footprint_topic: local_costmap/published_footprint
     cycle_frequency: 12.0
     # BackUp: short physical reverse to escape wall contact when MPPI optimizer
     # fails (all sampled trajectories in lethal zone). Spin is still disabled —
@@ -347,8 +418,12 @@ behavior_server:
       plugin: "nav2_behaviors/BackUp"
     wait:
       plugin: "nav2_behaviors/Wait"
-    local_frame: odom
-    global_frame: map
+    # nav2_behaviors::Wait is a pure timer (no TF/costmap use — verified
+    # against wait.cpp), so global_frame/robot_base_frame/transform_tolerance
+    # below are inert for it; kept correct in case Spin/BackUp/DriveOnHeading
+    # (which DO read simulate_ahead_time/*_rotational_vel/rotational_acc_lim)
+    # are ever re-enabled.
+    global_frame: odom
     robot_base_frame: base_link
     transform_tolerance: 1.0
     simulate_ahead_time: 2.0
@@ -361,7 +436,8 @@ waypoint_follower:
     use_sim_time: false
     loop_rate: 20
     stop_on_failure: false
-    action_server_result_timeout: 900.0
+    # action_server_result_timeout is not declared by nav2_waypoint_follower
+    # on Humble (verified against source) — dropped.
     waypoint_task_executor_plugin: "wait_at_waypoint"
     wait_at_waypoint:
       plugin: "nav2_waypoint_follower::WaitAtWaypoint"

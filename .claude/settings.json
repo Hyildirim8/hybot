@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//dev/input/**)",
+      "Bash(sudo fuser -v /dev/input/js0)",
+      "Bash(fuser -v /dev/input/js0)",
+      "Bash(xxd)",
+      "Bash(echo \"cat exit: $?\")",
+      "Bash(ps -fp 2856)",
+      "Read(//proc/2856/**)",
+      "Bash(systemctl list-units *)",
+      "Bash(lsusb)",
+      "Bash(dmesg)",
+      "Bash(docker restart *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)"
+    ]
+  }
+}

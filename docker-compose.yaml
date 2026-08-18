@@ -37,10 +37,20 @@ x-ros-service: &ros-service
   environment:
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
     FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+    # Restricts DDS discovery to localhost so a foreign device on the LAN
+    # can't be seen on domain 0 (was causing a duplicate /robot_state_publisher
+    # that broke RViz's RobotModel display, 2026-08-11). Unlike an
+    # interfaceWhiteList this doesn't touch the transport/socket layer, so it
+    # can't affect the ESP32 bridge's own discovery the way ROS_DOMAIN_ID does.
+    ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
 
 x-config-mount: &config-mount
   - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-  - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+  # DDS_PROFILE swaps which profile file lands at the fixed in-container path,
+  # so FASTRTPS_DEFAULT_PROFILES_FILE never has to change. Default is the
+  # isolated profile; set DDS_PROFILE=fastdds_lan.xml (or pass --lan to
+  # scripts/launch.sh) when the PC-side RViz viewer needs to reach the robot.
+  - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
   - ./config/controllers.yaml:/config/controllers.yaml:ro
 
 # ---------------------------------------------------------------------------
@@ -58,7 +68,7 @@ services:
     privileged: true                    # needed for /dev/input/* access
     volumes:
       - /dev/input:/dev/input           # joystick device hot-plug
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
     command:
       - bash
       - -c
@@ -89,7 +99,7 @@ services:
     <<: *ros-service
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_teleop/ecza_teleop/teleop_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/teleop_node.py:ro
     command:
@@ -116,8 +126,9 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - /dev:/dev
     command: >
       serial --dev ${SERIAL_DEV:-/dev/ttyACM0} --baudrate 115200 --verbose ${VERBOSE:-1}
@@ -133,12 +144,30 @@ services:
   # joint_state_broadcaster via topic_based_ros2_control hardware interface.
   robot_description:
     <<: *ros-service
+    # controller_manager's 50Hz control loop asks for FIFO RT scheduling
+    # (priority 50) and was silently falling back to normal scheduling —
+    # "Could not enable FIFO RT scheduling policy: Operation not permitted"
+    # in every startup log — because the container had neither the
+    # capability to raise its scheduling class nor an rtprio ulimit. Under
+    # load (Nav2 + costmap + planner all active) that let the control loop's
+    # timing jitter, plausibly behind erratic in-place rotation / drift
+    # during autonomous driving. cap_add + ulimits grant exactly what
+    # ros2_control's own docs ask for (see the warning's own link).
+    cap_add:
+      - SYS_NICE
+    ulimits:
+      rtprio: 99
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
       - ./src/ecza_description/launch/hardware.launch.py:/ws/install/share/ecza_description/launch/hardware.launch.py:ro
+      # hardware.launch.py bunu executable="wheel_bridge.py" ile çalıştırıyor,
+      # yani gerçekten koşan kopya lib/ altındaki. Mount edilmezse buradaki
+      # düzenlemeler ancak image rebuild ile devreye girer (urdf ve launch
+      # için zaten aynı desen kullanılıyor).
+      - ./src/ecza_description/scripts/wheel_bridge.py:/ws/install/lib/ecza_description/wheel_bridge.py:ro
       - ./src/ecza_description/scripts/wheel_bridge.py:/ws/install/lib/ecza_description/wheel_bridge.py:ro
     command: >
       ros2 launch ecza_description hardware.launch.py
@@ -147,23 +176,18 @@ services:
       - teleop
 
   # ── rviz ──────────────────────────────────────────────────────────────────
-  # Runs RViz2 inside the container, rendered via Wayland (labwc + wayvnc).
+  # Runs RViz2 on its own private Xvfb display (:99) and serves ONLY that
+  # display over VNC on port 5901. Nothing else is ever drawn on :99, so a
+  # viewer connecting to <pi-ip>:5901 sees the RViz window filling the frame —
+  # no desktop, no taskbar, no other windows. The Pi's own desktop stays on
+  # its separate WayVNC port, untouched by this container.
+  #
+  #   RViz only .......... <pi-ip>:5901   (this container)
+  #   Full Pi desktop .... <pi-ip>:5900   (host WayVNC)
   #
   # Activated by the 'rviz' profile:
   #   bash scripts/launch.sh --rviz
   #   bash scripts/rviz.sh --docker          (standalone, no other services)
-  #
-  # Display: self-contained Xvfb virtual X server (NOT the host's
-  # XWayland/labwc session). rviz2 reliably SIGSEGVs ("libGL error: failed
-  # to create drawable" in Ogre's GLXWindow::create) when connected to the
-  # host's rootless XWayland — root-caused to XWayland/labwc's own DRI3
-  # buffer-sharing negotiation, confirmed by ruling out every client-side
-  # variable (shader bugs, GL version, DRI2/3, software vs real GPU
-  # rendering, GPU permissions, kcmp() capability, respawn timing — all
-  # tested, none fixed it while connected to XWayland). Xvfb needs no
-  # external compositor at all, avoiding that code path entirely. View it
-  # via VNC on port 5901 (x11vnc, no password — LAN-only, do not expose
-  # this port to the internet).
   #
   # The command waits 8 s before launching so robot_state_publisher has time
   # to advertise /robot_description before RViz tries to subscribe to it.
@@ -174,12 +198,13 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       DISPLAY: ":99"
       LIBGL_ALWAYS_SOFTWARE: "1"
       MESA_LOADER_DRIVER_OVERRIDE: llvmpipe
     volumes:
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_description/urdf/rover.urdf.xacro:/ws/install/share/ecza_description/urdf/rover.urdf.xacro:ro
       # Patched: the stock indexed_8bit_image.material's custom GLSL
       # (sampler2D + sampler1D in one program) reliably SIGSEGVs rviz2
@@ -195,25 +220,39 @@ services:
         # ("Server is already active for display 99"). Clean up first.
         rm -f /tmp/.X99-lock /tmp/.X11-unix/X99 2>/dev/null || true
         echo "[rviz] starting Xvfb on :99..."
-        Xvfb :99 -screen 0 1280x800x24 +extension GLX +render -nolisten tcp &
-        XVFB_PID=$!
+        # 1280x720, not 1920x1080. There is no GPU on this display — Mesa
+        # falls back to llvmpipe, so every pixel is rendered on the CPU and
+        # then re-encoded by x11vnc. At 1080p rviz2 alone measured 120-142%
+        # CPU with a system load average of 10-15 on 4 cores, which starved
+        # the EKF ("Failed to meet update rate") and left rviz itself logging
+        # TF extrapolation errors. 720p is 44% of the pixels.
+        Xvfb :99 -screen 0 1280x720x24 +extension GLX +render -nolisten tcp &
         sleep 2
-        echo "[rviz] starting x11vnc on port 5901 (no auth — LAN-only)..."
+        echo "[rviz] serving :99 on port 5901 (no auth — LAN-only)..."
         # -auth /dev/null: Xvfb was started with no -auth cookie file (no
         # access control needed for a container-local display), but x11vnc
         # otherwise tries to auto-locate one and errors out when it can't.
-        x11vnc -display :99 -auth /dev/null -nopw -forever -shared -rfbport 5901 -bg -o /tmp/x11vnc.log -quiet
+        # -wait/-defer 50: poll and push at ~20 fps instead of x11vnc's default
+        # busy-polling; rviz only renders ~9 fps here anyway.
+        x11vnc -display :99 -auth /dev/null -nopw -forever -shared -rfbport 5901 -wait 50 -defer 50 -bg -o /tmp/x11vnc.log -quiet
         echo "[rviz] waiting 8 s for robot_state_publisher..."
         sleep 8
-        # exec rviz2 directly (not via `ros2 launch display.launch.py`):
-        #   1. display.launch.py also starts its own robot_state_publisher,
-        #      duplicating the one already running in robot_description —
-        #      wasted CPU + redundant TF publishing.
-        #   2. ros2 launch does not propagate a crashed rviz2's exit to its
-        #      own exit code, so Docker never saw the crash to restart on.
-        #      exec'ing it directly as PID 1 means a crash kills the
-        #      container, so restart:unless-stopped recovers it.
-        exec ros2 run rviz2 rviz2 -d /config/rover.rviz --ros-args -p use_sim_time:=false
+        # Crash-supervisor loop: only rviz2 restarts on crash, not the whole
+        # container. Xvfb/x11vnc stay up across a crash, so the VNC session
+        # doesn't drop — the viewer just sees rviz2's window disappear and
+        # reappear a couple seconds later instead of losing the connection.
+        # (Not using `ros2 launch display.launch.py` here: it also starts
+        # its own robot_state_publisher, duplicating the one already
+        # running in robot_description, and it doesn't propagate rviz2's
+        # exit code, which this loop needs to detect a crash.)
+        CRASH_COUNT=0
+        while true; do
+          ros2 run rviz2 rviz2 -d /config/rover.rviz --ros-args -p use_sim_time:=false
+          EXIT_CODE=$$?
+          CRASH_COUNT=$$((CRASH_COUNT + 1))
+          echo "[rviz] rviz2 exited (code $$EXIT_CODE, crash #$$CRASH_COUNT) — restarting in 2s"
+          sleep 2
+        done
     restart: unless-stopped
     depends_on:
       - robot_description
@@ -222,13 +261,13 @@ services:
   # GY-85 9-DOF IMU module on I2C bus 1 (RPi5 GPIO2=SDA, GPIO3=SCL).
   # Publishes /imu/data_raw (sensor_msgs/Imu) and /imu/mag (MagneticField).
   # Requires I2C enabled on the RPi: sudo raspi-config → Interface → I2C → On
-  # Verify sensor addresses: sudo i2cdetect -y 1  (expect: 1e, 53, 69)
+  # Verify sensor addresses: sudo i2cdetect -y 1  (expect: 1e, 53, 68)
   imu:
     <<: *ros-service
     user: root                               # /dev/i2c-1 requires root or i2c group
     privileged: true
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_imu/ecza_imu/imu_node.py:/imu_node.py:ro
     devices:
       - /dev/i2c-1:/dev/i2c-1
@@ -248,42 +287,6 @@ services:
     depends_on:
       - robot_description
 
-  # ── camera ───────────────────────────────────────────────────────────────
-  # ESP32-CAM (AI Thinker), Raw Binary Serial protocol over the RPi5's own
-  # UART (ttyAMA0) at 4,000,000 baud — the "Recommended for Navigation"
-  # method from ESP32-CAM-RealTime-Vision-Benchmark (115.8ms latency, 7.5ms
-  # jitter, <1us CPU encode — far more stable than the project's WiFi/HTTP
-  # variant, which had 55.6ms jitter with spikes to 1.5s).
-  # Requires the uart-clk-100m dtoverlay for clean 4M baud (already applied
-  # — see /boot/firmware/config.txt) and firmware/binary.cpp flashed to the
-  # ESP32-CAM (default platformio.ini env, upload_port=/dev/ttyAMA0).
-  # Publishes /camera/image_raw/compressed (sensor_msgs/CompressedImage).
-  camera:
-    <<: *ros-service
-    user: root                               # /dev/ttyAMA0 requires root or dialout group
-    privileged: true
-    volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
-      - ./src/ecza_camera/ecza_camera/esp32cam_node.py:/esp32cam_node.py:ro
-    devices:
-      - /dev/ttyAMA0:/dev/ttyAMA0
-    command:
-      - bash
-      - -c
-      - |
-        ros2 run tf2_ros static_transform_publisher \
-          --ros-args -r __node:=camera_tf_pub \
-          -- 0.15 0.0 0.10 0.0 0.0 0.0 base_link camera_link &
-        exec python3 /esp32cam_node.py \
-          --ros-args \
-          -p serial_port:=/dev/ttyAMA0 \
-          -p baud_rate:=4000000 \
-          -p frame_id:=camera_link \
-          -p publish_raw:=false
-    restart: unless-stopped
-    depends_on:
-      - robot_description
-
   # ── csi_camera ───────────────────────────────────────────────────────────
   # RPi Camera Module 2 (imx219) on the CAM0/CSI port. Capture itself runs on
   # the HOST (scripts/csi_cam_stream.sh + ecza-robotu-csi-cam.service) — the
@@ -296,11 +299,14 @@ services:
   # View at http://<rpi-ip>:8081/ or rqt_image_view — deliberately NOT added
   # as an rviz Image display (segfaults rviz2 under this container's
   # Xvfb+llvmpipe setup even when disabled; see rover.rviz's Map display
-  # comment).
+  # comment). scripts/remote_teleop_client.py instead pulls chunked-JPEG
+  # frames over UDP on CSI_CAM_UDP_PORT — more stable than HTTP/TCP over a
+  # flaky WiFi link back to the operator's PC (a lost chunk drops one frame
+  # instead of stalling the stream on a TCP retransmit).
   csi_camera:
     <<: *ros-service
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_camera/ecza_camera/rpicam_node.py:/rpicam_node.py:ro
     command:
       - bash
@@ -314,7 +320,33 @@ services:
           -p host:=127.0.0.1 \
           -p port:=${CSI_CAM_PORT:-8090} \
           -p frame_id:=csi_camera_link \
-          -p http_port:=8081
+          -p http_port:=8081 \
+          -p udp_port:=${CSI_CAM_UDP_PORT:-8082}
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+
+  # ── remote_teleop ────────────────────────────────────────────────────────
+  # Lets a joystick plugged into a REMOTE machine (not this Pi) drive the
+  # rover from anywhere reachable over the network — entirely additive, does
+  # NOT touch the local joy/teleop setup (that keeps working exactly as
+  # before). remote_joy_bridge.py listens on REMOTE_TELEOP_PORT and
+  # republishes whatever it receives as sensor_msgs/Joy on /joy, so
+  # teleop_node.py can't tell it apart from the local F710 — every existing
+  # behaviour (dead-man, strafe_invert, pivot mapping, scan safety, AUTO/
+  # TELEOP handoff) keeps working unmodified for this input too.
+  # Client: scripts/remote_teleop_client.py (runs on the remote PC).
+  remote_teleop:
+    <<: *ros-service
+    volumes:
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
+      - ./src/ecza_teleop/ecza_teleop/remote_joy_bridge.py:/remote_joy_bridge.py:ro
+    command:
+      - python3
+      - /remote_joy_bridge.py
+      - --ros-args
+      - -p
+      - port:=${REMOTE_TELEOP_PORT:-9092}
     restart: unless-stopped
     depends_on:
       - robot_description
@@ -376,6 +408,92 @@ services:
       - robot_description
       - imu
 
+  # ── ekf ───────────────────────────────────────────────────────────────────
+  # robot_localization EKF: fuses mecanum encoder odom (/odom) with the GY-85
+  # gyro-z (/imu/data_raw) so the robot doesn't slip/drift relative to the
+  # lidar while moving — publishes /odometry/filtered and owns the
+  # odom→base_link TF (controllers.yaml enable_odom_tf: false hands this off).
+  # Profile: nav — only needed when SLAM/Nav2 is consuming the TF tree.
+  ekf:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
+      - ./config/ekf.yaml:/config/ekf.yaml:ro
+    command:
+      - ros2
+      - run
+      - robot_localization
+      - ekf_node
+      - --ros-args
+      - --params-file
+      - /config/ekf.yaml
+    restart: unless-stopped
+    depends_on:
+      - robot_description
+      - imu
+      - rf2o
+
+  # ── rf2o ──────────────────────────────────────────────────────────────────
+  # rf2o_laser_odometry — lidar taramalarından odometri türetir (range-flow
+  # scan matching). Tekerlek encoder'larına HİÇ bakmaz, dolayısıyla makara
+  # kayması ve yanlış tick/tur kalibrasyonundan etkilenmez.
+  #
+  # Neden eklendi: config/rover_params.yaml'daki odom_linear_scale=0.50 /
+  # odom_angular_scale=0.85 çarpanları gerçek bir encoder-geometri hatasının
+  # üstünü örtüyor ve rijit bir gövdede tutarsız (2x lineer, 1.18x açısal).
+  # MentorPi aynı sorunu aynı şekilde çözüyor: driver/controller/config/ekf.yaml
+  # içinde odom0=odom_raw (encoder HIZLARI) + odom1=odom_rf2o (lazer POZU).
+  #
+  # publish_tf: false — TF'i EKF yayınlıyor (config/ekf.yaml). rf2o burada
+  # sadece /odom_rf2o topic'ini üretir, EKF onu odom1 olarak füzyonlar. İki
+  # düğüm birden odom→base_link yayınlarsa TF ağacı bozulur.
+  #
+  # Girdi olarak /scan_raw (720 bin @ 12.7 Hz) değil /scan (360 bin @ 6.5 Hz)
+  # kullanılıyor: RPi'de işi ~4 kat azaltır ve rf2o'nun 5 Hz'lik çıkışı için
+  # 6.5 Hz girdi fazlasıyla yeterli.
+  rf2o:
+    <<: *ros-service
+    profiles:
+      - nav
+    volumes:
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
+    command:
+      - ros2
+      - run
+      - rf2o_laser_odometry
+      - rf2o_laser_odometry_node
+      - --ros-args
+      - -p
+      - laser_scan_topic:=/scan
+      - -p
+      - odom_topic:=/odom_rf2o
+      - -p
+      - base_frame_id:=base_link
+      - -p
+      - odom_frame_id:=odom
+      - -p
+      - publish_tf:=false
+      # freq, rf2o'nun YENİ TARAMA VAR MI diye baktığı hız — tarama işleme
+      # hızı değil. 5.0'da timer /scan ile senkron olmadığı için taramaların
+      # yarısı atlanıyor ve çıkış 2.6 Hz'e düşüyordu (ölçüldü 2026-08-12).
+      # /scan'den (~6.5 Hz) hızlı yoklamak her taramanın işlenmesini garanti
+      # eder. Maliyeti yok: tarama başına işlem süresi 0.13-0.47 ms, yani
+      # 10 Hz'de bile tek çekirdeğin ~%0.5'i (ölçülen toplam: %1.4-1.55).
+      - -p
+      - freq:=10.0
+      # freq > tarama hızı olduğu için her tick'te yeni tarama olmuyor ve rf2o
+      # saniyede ~3 kez "Waiting for laser_scans" WARN'ı basıyor. Bu bu kurulumda
+      # NORMAL, arıza değil — ama log'u boğuyor. Gerçek sağlık göstergesi
+      # /odom_rf2o'nun yayın hızıdır (`ros2 topic hz /odom_rf2o`, ~6 Hz
+      # beklenir); rf2o ölürse topic susar. Hata ayıklarken bu satırı kaldır.
+      - --log-level
+      - error
+    restart: unless-stopped
+    depends_on:
+      - lidar
+
   # ── slam_manager ──────────────────────────────────────────────────────────
   # SLAM haritalama yöneticisi ve otonom frontier keşfi.
   # Joystick tuşları:
@@ -388,7 +506,7 @@ services:
       - nav
     volumes:
       - ./config/rover_params.yaml:/config/rover_params.yaml:ro
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./config/controllers.yaml:/config/controllers.yaml:ro
       - ./maps:/maps:rw
       - ./src/ecza_teleop/ecza_teleop/slam_manager_node.py:/ws/install/lib/python3.10/site-packages/ecza_teleop/slam_manager_node.py:ro
@@ -415,7 +533,7 @@ services:
     privileged: true
     volumes:
       - /dev:/dev
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./src/ecza_lidar/launch/lidar.launch.py:/ws/install/share/ecza_lidar/launch/lidar.launch.py:ro
       - ./src/ecza_lidar/scripts/scan_restamper.py:/ws/install/lib/ecza_lidar/scan_restamper.py:ro
     command:
@@ -461,12 +579,13 @@ services:
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
       FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
       # Override on the command line to switch modes:
       #   NAV_MODE=nav MAP=/maps/my_map.yaml docker compose --profile nav up -d --force-recreate navigation
       NAV_MODE: ${NAV_MODE:-slam}
       MAP: ${MAP:-}
     volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
       - ./maps:/maps:rw
       - ./docker/nav2_entrypoint.sh:/nav2_entrypoint.sh:ro
       # Bind-mount güncel config dosyaları — image rebuild gerektirmeden aktif olur

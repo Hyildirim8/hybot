@@ -27,16 +27,63 @@ ekf_filter_node:
 
     # ── Source 0: mecanum_drive_controller wheel-encoder odometry ────────────
     # nav_msgs/Odometry:
-    #   pose.pose  in odom frame    → x, y, yaw absolute position
-    #   twist.twist in body frame   → vx, vy, vyaw velocities
+    #   pose.pose  in odom frame    → x, y absolute position (yaw excluded, see below)
+    #   twist.twist in body frame   → vx, vy velocities (vyaw excluded, see below)
+    #
+    # 2026-08-01: yaw position AND vyaw were both enabled here. Wheel-encoder
+    # yaw doesn't move at all when the robot is picked up and turned by hand
+    # (or whenever wheels slip) — but this being an ABSOLUTE pose measurement
+    # meant the EKF kept correcting the gyro-tracked yaw back toward whatever
+    # frozen heading the wheels last reported, so the fused orientation
+    # visibly snapped back to "straight" a moment after a hand-turn. Yaw is
+    # now IMU-only (gyro) — wheel odom contributes x/y/vx/vy translation only.
+    # 2026-08-12: absolute x/y turned OFF here. Wheel-encoder pose is the one
+    # source we KNOW is wrong — rover_params.yaml has to multiply it by
+    # odom_linear_scale: 0.50 (and odom_angular_scale: 0.85, a different
+    # factor, which a rigid body cannot need) just to make it plausible. While
+    # it was the only absolute position input, that error integrated straight
+    # into odom→base_link and SLAM had to fight it: measured map→odom yaw
+    # correction was 32.6 degrees.
+    #
+    # The encoder now contributes VELOCITY only, and odom1 (rf2o laser
+    # odometry, below) supplies absolute pose. This is exactly MentorPi's
+    # split — driver/controller/config/ekf.yaml there is odom0_config
+    # velocities-only + odom1_config pose-only.
     odom0: /odom
-    odom0_config: [true,  true,  false,    # x,  y,  z       (pose — 2D only)
-                   false, false, true,     # ro, pi, yaw      (pose — 2D only)
+    odom0_config: [false, false, false,    # x,  y,  z       (odom1/rf2o owns absolute pose)
+                   false, false, false,    # ro, pi, yaw      (excluded — see note above)
                    true,  true,  false,    # vx, vy, vz       (twist body-frame)
-                   false, false, true,     # vro,vpi,vyaw     (twist body-frame)
+                   false, false, false,    # vro,vpi,vyaw     (excluded — see note above)
                    false, false, false]    # ax, ay, az       (not in odom msg)
     odom0_queue_size: 5
-    odom0_differential: false   # pose is absolute in odom frame
+    odom0_differential: false
+
+    # ── Source 2: rf2o_laser_odometry — absolute pose from scan matching ────
+    # nav_msgs/Odometry on /odom_rf2o, produced by the rf2o service in
+    # docker-compose.yaml at 5 Hz from /scan. Derived purely from lidar
+    # geometry, so wheel slip and encoder scale errors cannot reach it.
+    #
+    # x/y/yaw only — rf2o's twist is a finite difference of its own pose and
+    # is much noisier than the encoder's, so velocity stays with odom0.
+    #
+    # odom1_relative: true — treat rf2o's first pose as the origin. Without
+    # it, rf2o's internal starting pose would be taken as an absolute claim
+    # about where the robot is in the odom frame and yank the filter on
+    # startup. MentorPi sets this the same way.
+    #
+    # NOTE: rf2o degrades in geometrically featureless spaces (a long blank
+    # corridor gives it nothing to lock onto along the corridor axis). If the
+    # estimate ever starts sliding in exactly such a place, that is the reason
+    # — encoder velocities above are what carry the filter through it.
+    odom1: /odom_rf2o
+    odom1_config: [true,  true,  false,    # x,  y,  z       (absolute, laser-derived)
+                   false, false, true,     # ro, pi, yaw     ← yaw from scan matching
+                   false, false, false,    # vx, vy, vz      (noisy — odom0 owns velocity)
+                   false, false, false,    # vro,vpi,vyaw
+                   false, false, false]    # ax, ay, az
+    odom1_queue_size: 2
+    odom1_differential: false
+    odom1_relative: true
 
     # ── Source 1: GY-85 ITG3205 gyroscope (angular velocity z only) ─────────
     # sensor_msgs/Imu:

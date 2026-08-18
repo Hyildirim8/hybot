@@ -191,7 +191,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Map
       Alpha: 0.7
       Color Scheme: map
-      Draw Under: true
+      Draw Behind: true
       Enabled: true
       Name: Map
       Topic:
@@ -215,7 +215,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Map
       Alpha: 0.4
       Color Scheme: costmap
-      Draw Under: false
+      Draw Behind: false
       Enabled: true
       Name: GlobalCostmap
       Topic:
@@ -239,7 +239,7 @@ Visualization Manager:
     - Class: rviz_default_plugins/Map
       Alpha: 0.55
       Color Scheme: costmap
-      Draw Under: false
+      Draw Behind: false
       Enabled: true
       Name: LocalCostmap
       Topic:

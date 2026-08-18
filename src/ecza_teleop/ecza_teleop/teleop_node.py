@@ -24,8 +24,10 @@ Parameters (from rover_params.yaml):
     angular_invert        (bool, default false) — flip joystick yaw direction
   enable_button         (int, default 5)    — dead-man button (R1)
   require_enable_button (bool, default false)
-  btn_strafe_left       (int, default 6)    — full-speed strafe left  (LT)
-  btn_strafe_right      (int, default 7)    — full-speed strafe right (RT)
+  axis_dpad_x           (int, default 4)    — D-pad horizontal: rear-axle pivot (RL/RR differential)
+  axis_dpad_y           (int, default 5)    — D-pad vertical: front-axle pivot (FL/FR differential)
+  btn_pivot_left        (int, default 6)    — LT: right-side wheels only forward (wide turn)
+  btn_pivot_right       (int, default 7)    — RT: left-side wheels only forward (wide turn)
     btn_auto_mode         (int, default 9)    — toggle autonomous mode  (Start)
     btn_auto_mode_alt     (int, default -1)   — optional alternate toggle button
   btn_auto_mode_candidates (int[], default [9, 8]) — accepted toggle buttons
@@ -47,7 +49,8 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from geometry_msgs.msg import PoseStamped, Twist
+from action_msgs.srv import CancelGoal
+from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Joy, LaserScan
 from std_msgs.msg import Bool
 
@@ -64,8 +67,14 @@ class TeleopNode(Node):
         self.declare_parameter("enable_button", 5)
         self.declare_parameter("enable_button_alt", -1)
         self.declare_parameter("require_enable_button", True)
-        self.declare_parameter("btn_strafe_left", 6)
-        self.declare_parameter("btn_strafe_right", 7)
+        self.declare_parameter("axis_dpad_x", 4)
+        self.declare_parameter("axis_dpad_y", 5)
+        self.declare_parameter("btn_pivot_left", 6)
+        self.declare_parameter("btn_pivot_right", 7)
+        self.declare_parameter("wheel_base", 0.38)
+        self.declare_parameter("wheel_separation_width", 0.26)
+        self.declare_parameter("wheel_radius", 0.04)
+        self.declare_parameter("pivot_wheel_speed_rad_s", 10.0)
         self.declare_parameter("btn_auto_mode", 9)   # Start button
         self.declare_parameter("btn_auto_mode_alt", -1)
         self.declare_parameter("btn_auto_mode_candidates", [9, 8])
@@ -73,6 +82,7 @@ class TeleopNode(Node):
         self.declare_parameter("mode_handoff_stop_s", 0.35)
         self.declare_parameter("nav_cmd_topic", "/cmd_vel_nav")
         self.declare_parameter("auto_enable_on_nav_cmd", True)
+        self.declare_parameter("auto_enable_reinstate_quiet_s", 3.0)
         self.declare_parameter("start_in_autonomous", True)
         self.declare_parameter("max_linear_speed", 0.5)
         self.declare_parameter("max_angular_speed", 1.0)
@@ -99,8 +109,14 @@ class TeleopNode(Node):
         self._btn_en = self.get_parameter("enable_button").value
         self._btn_en_alt = self.get_parameter("enable_button_alt").value
         self._require_en = self.get_parameter("require_enable_button").value
-        self._btn_sl = self.get_parameter("btn_strafe_left").value
-        self._btn_sr = self.get_parameter("btn_strafe_right").value
+        self._ax_dpad_x = self.get_parameter("axis_dpad_x").value
+        self._ax_dpad_y = self.get_parameter("axis_dpad_y").value
+        self._btn_pivot_left = self.get_parameter("btn_pivot_left").value
+        self._btn_pivot_right = self.get_parameter("btn_pivot_right").value
+        self._pivot_wheel_base = float(self.get_parameter("wheel_base").value)
+        self._pivot_wheel_sep = float(self.get_parameter("wheel_separation_width").value)
+        self._pivot_wheel_radius = float(self.get_parameter("wheel_radius").value)
+        self._pivot_wheel_speed = float(self.get_parameter("pivot_wheel_speed_rad_s").value)
         self._btn_auto = self.get_parameter("btn_auto_mode").value
         self._btn_auto_alt = self.get_parameter("btn_auto_mode_alt").value
         self._btn_auto_candidates = self._normalise_button_candidates(
@@ -112,9 +128,27 @@ class TeleopNode(Node):
         self._auto_enable_on_nav_cmd = bool(
             self.get_parameter("auto_enable_on_nav_cmd").value
         )
+        self._auto_reinstate_quiet_s = float(
+            self.get_parameter("auto_enable_reinstate_quiet_s").value
+        )
         self._start_in_autonomous = self.get_parameter("start_in_autonomous").value
         self._max_lin = self.get_parameter("max_linear_speed").value
         self._max_ang = self.get_parameter("max_angular_speed").value
+
+        # ── Axle/side pivot geometry ─────────────────────────────────────
+        # LT/RT and D-pad drive one wheel pair forward while leaving the
+        # opposite pair at zero, by combining a linear component with a
+        # rotation component in the exact ratio (wz = linear / pivot_k)
+        # that the mecanum IK needs to cancel the idle pair to zero.
+        # pivot_k matches wheel_bridge.py's kinematic_k = wheel_base/2 + wheel_separation_width/2.
+        # pivot_wheel_speed_rad_s is the target speed for the ACTIVE wheel pair;
+        # keep it well under the firmware's MAX_SPEED_RAD_S (18.75) — the active
+        # pair's demand is vx+k*wz combined, not vx or wz alone, so it saturates
+        # at roughly half the speed a pure-vx or pure-wz command would tolerate.
+        self._pivot_k = max(
+            1e-6, (self._pivot_wheel_base / 2.0) + (self._pivot_wheel_sep / 2.0)
+        )
+        self._pivot_v = self._pivot_wheel_speed * self._pivot_wheel_radius
         self._deadzone = self.get_parameter("joy_deadzone").value
         self._reject_extreme_axis_startup = bool(
             self.get_parameter("reject_extreme_axis_startup").value
@@ -155,6 +189,14 @@ class TeleopNode(Node):
         self._autonomous = bool(self._start_in_autonomous)  # False = TELEOP, True = AUTO
         self._prev_auto_btn = False       # edge-detect across primary/alt buttons
         self._last_mode_toggle_time = 0.0
+        # Set when the operator explicitly leaves AUTO. Without it, a Nav2 goal
+        # that is still running keeps publishing motion, and _nav_cmd_cb's
+        # auto_enable_on_nav_cmd flips straight back to AUTO — so Start looks
+        # like it does nothing and the operator can never take over while a
+        # goal is active (observed live 2026-08-11: "Mode → TELEOP" followed
+        # ~1 s later by "Nav2 command received -> AUTONOMOUS", every time).
+        self._auto_enable_inhibited = False
+        self._last_nav_motion_time = 0.0
         self._handoff_stop_until = 0.0
         # Manuel TELEOP geçişinden sonra auto_enable_on_nav_cmd soğuma süresi:
         # smoother kuyruğundaki Nav2 komutları Start'a basıldıktan hemen sonra
@@ -210,11 +252,16 @@ class TeleopNode(Node):
         self._nav_sub = self.create_subscription(
             Twist, self._nav_cmd_topic, self._nav_cmd_cb, reliable_qos
         )
-        # Keşif durumu (slam_manager A butonu): keşif AÇILDIĞINDA manuel kilidi
-        # kaldırıp AUTO'ya geç — kullanıcının açık niyeti.
-        self._exploring_sub = self.create_subscription(
-            Bool, "slam_manager/exploring", self._exploring_cb, latched_qos
-        )
+        # Cancel-goal service clients (see _cancel_nav_goals). These are the
+        # action servers' own cancel services, so goals started from RViz —
+        # which this node never gets a handle for — can still be dropped.
+        self._nav_cancel_clients = [
+            self.create_client(CancelGoal, "/navigate_to_pose/_action/cancel_goal"),
+            self.create_client(
+                CancelGoal, "/navigate_through_poses/_action/cancel_goal"
+            ),
+        ]
+
         self._scan_sub = None
         if self._enable_scan_safety:
             self._scan_sub = self.create_subscription(
@@ -241,7 +288,8 @@ class TeleopNode(Node):
             f"teleop_node ready — axes lx={self._ax_lx} ly={self._ax_ly} "
             f"az={self._ax_az}, enable_btn={self._btn_en}, "
             f"enable_btn_alt={self._btn_en_alt}, "
-            f"strafe_left_btn={self._btn_sl}, strafe_right_btn={self._btn_sr}, "
+            f"dpad_axes=({self._ax_dpad_x},{self._ax_dpad_y}), "
+            f"pivot_left_btn={self._btn_pivot_left}, pivot_right_btn={self._btn_pivot_right}, "
             f"auto_mode_buttons={self._auto_button_indices()}, "
             f"nav_cmd_topic={self._nav_cmd_topic}, start_in_autonomous={self._start_in_autonomous}, "
             f"require_enable={self._require_en}, "
@@ -288,6 +336,20 @@ class TeleopNode(Node):
             if idx >= 0 and idx not in indices:
                 indices.append(idx)
         return indices
+
+    def _cancel_nav_goals(self) -> None:
+        """Ask Nav2 to drop whatever goal is running.
+
+        An all-zero goal_info means "cancel every accepted goal" per the
+        action_msgs/CancelGoal contract. Fire-and-forget: this runs inside the
+        joy callback, so it must not block waiting for a reply, and there is
+        nothing useful to do with the result either way.
+        """
+        request = CancelGoal.Request()
+        for client in self._nav_cancel_clients:
+            if not client.service_is_ready():
+                continue
+            client.call_async(request)
 
     def _apply_deadzone(self, value: float) -> float:
         if abs(value) < self._deadzone:
@@ -439,14 +501,16 @@ class TeleopNode(Node):
             self._autonomous = not self._autonomous
             self._last_mode_toggle_time = now_s
             self._handoff_stop_until = now_s + max(0.0, self._mode_handoff_stop_s)
-            if not self._autonomous:
-                # Start ile TELEOP'a geçildi: kilitle — Nav2 komutları modu
-                # geri çeviremez. Soğuma süresi de yedek olarak kalsın.
-                self._manual_teleop_lock = True
-                self._nav_auto_enable_blocked_until = now_s + 5.0
+            if self._autonomous:
+                # Operator handed control back on purpose — let Nav2 drive.
+                self._auto_enable_inhibited = False
             else:
-                # Start ile AUTO'ya geçildi: kilit kalkar.
-                self._manual_teleop_lock = False
+                # Operator takeover: block auto re-entry and tell Nav2 to drop
+                # the running goal, otherwise it keeps replanning against a
+                # target the operator has already overridden.
+                self._auto_enable_inhibited = True
+                self._last_nav_motion_time = now_s
+                self._cancel_nav_goals()
             self._publish_mode()
             # Always stop the robot on any transition so neither Nav2 nor
             # the joystick leaves the wheels spinning during the handoff.
@@ -510,22 +574,51 @@ class TeleopNode(Node):
         # ── Forward / backward (stick) ─────────────────────────────────
         vx = axis(self._ax_lx) * self._max_lin
 
-        # ── Strafe: stick axis PLUS dedicated buttons (additive, clamped) ─
+        # ── Strafe: left stick X only ──────────────────────────────────────
         # strafe_invert=false → positive vy = RIGHT (hardware convention on this rover)
         # strafe_invert=true  → positive vy = LEFT  (ROS REP-103 convention)
-        # Flip strafe_invert in rover_params.yaml if D-pad/LT/RT directions are reversed.
+        # Flip strafe_invert in rover_params.yaml if the stick direction is reversed.
         ss = -1.0 if self._strafe_invert else 1.0
-        vy_stick = ss * axis(self._ax_ly) * self._max_lin
-        vy_btn = 0.0
-        if btn(self._btn_sl):   # LT → strafe left
-            vy_btn -= ss * self._max_lin
-        if btn(self._btn_sr):   # RT → strafe right
-            vy_btn += ss * self._max_lin
-        vy = max(-self._max_lin, min(self._max_lin, vy_stick + vy_btn))
+        vy = ss * axis(self._ax_ly) * self._max_lin
 
-        # ── Rotation: right stick X ─────────────────────────────────────
+        # ── Rotation: right stick X (analog) ───────────────────────────────
+        # wz > 0 = CCW, wz < 0 = CW (REP-103; verified against real wheel spin).
         angular_sign = 1.0 if self._angular_invert else -1.0
         wz = angular_sign * axis(self._ax_az) * self._max_ang
+
+        def dpad(idx: int, sign: float) -> bool:
+            return idx < len(msg.axes) and (msg.axes[idx] * sign) > 0.5
+
+        # ── Digital axle/side pivots: one wheel pair forward, the other
+        # pair held at zero (not a simple in-place spin — see teleop-button-
+        # mapping memory / rover_params.yaml comments for the wheel-pair map).
+        # 2026-08-01: directions reported reversed from the intended wheel-pair
+        # map (user mis-described the reference diagram) — every branch below
+        # is negated relative to the first implementation so each physical
+        # button/direction now drives the opposite wheel pair.
+        pv, pk = self._pivot_v, self._pivot_k
+        if btn(self._btn_pivot_left):     # LT → right side only forward (wide turn)
+            vx += pv / 2.0
+            wz += pv / (2.0 * pk)
+        if btn(self._btn_pivot_right):    # RT → left side only forward (wide turn)
+            vx += pv / 2.0
+            wz += -pv / (2.0 * pk)
+        if dpad(self._ax_dpad_x, -1.0):   # D-pad LEFT → rear axle: RR fwd, RL back
+            vy += -pv / 2.0
+            wz += pv / (2.0 * pk)
+        if dpad(self._ax_dpad_x, 1.0):    # D-pad RIGHT → rear axle: RL fwd, RR back
+            vy += pv / 2.0
+            wz += -pv / (2.0 * pk)
+        if dpad(self._ax_dpad_y, 1.0):    # D-pad UP → front axle: FR fwd, FL back
+            vy += pv / 2.0
+            wz += pv / (2.0 * pk)
+        if dpad(self._ax_dpad_y, -1.0):   # D-pad DOWN → front axle: FL fwd, FR back
+            vy += -pv / 2.0
+            wz += -pv / (2.0 * pk)
+
+        vx = max(-self._max_lin, min(self._max_lin, vx))
+        vy = max(-self._max_lin, min(self._max_lin, vy))
+        wz = max(-self._max_ang, min(self._max_ang, wz))
 
         twist = Twist()
         twist.linear.x  = vx
@@ -558,10 +651,13 @@ class TeleopNode(Node):
             self.get_logger().info("Keşif açıldı (A) -> AUTONOMOUS (Nav2)")
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
+        if self._twist_has_motion(msg):
+            self._last_nav_motion_time = time.monotonic()
+
         if (
             self._auto_enable_on_nav_cmd
             and not self._autonomous
-            and not self._manual_teleop_lock
+            and not self._auto_enable_inhibited
             and self._twist_has_motion(msg)
             and time.monotonic() >= self._nav_auto_enable_blocked_until
         ):
@@ -593,6 +689,18 @@ class TeleopNode(Node):
         )
 
     def _watchdog_cb(self) -> None:
+        # Lift the operator-takeover inhibit once Nav2 has actually gone quiet
+        # (goal cancelled or finished). A later goal can then auto-engage AUTO
+        # again as usual — the inhibit only has to outlive the goal that was
+        # running when the operator took over.
+        if self._auto_enable_inhibited and not self._autonomous:
+            quiet_for = time.monotonic() - self._last_nav_motion_time
+            if quiet_for >= self._auto_reinstate_quiet_s:
+                self._auto_enable_inhibited = False
+                self.get_logger().info(
+                    "Nav2 sustu — yeni hedefle otomatik AUTO geçişi tekrar aktif"
+                )
+
         # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the
         # joy watchdog must not inject zero commands.
         if self._autonomous:
@@ -629,9 +737,11 @@ class TeleopNode(Node):
             abs(self._apply_deadzone(self._raw_axis(msg, self._ax_lx))) > 0.0
             or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_ly))) > 0.0
             or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_az))) > 0.0
+            or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_dpad_x))) > 0.0
+            or abs(self._apply_deadzone(self._raw_axis(msg, self._ax_dpad_y))) > 0.0
         )
-        active_buttons = self._button_pressed(msg, self._btn_sl) or self._button_pressed(
-            msg, self._btn_sr
+        active_buttons = self._button_pressed(msg, self._btn_pivot_left) or self._button_pressed(
+            msg, self._btn_pivot_right
         )
         return active_axes or active_buttons
 

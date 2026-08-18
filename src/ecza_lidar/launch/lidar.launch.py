@@ -63,18 +63,32 @@ def generate_launch_description() -> LaunchDescription:
             "frame_id": LaunchConfiguration("frame_id"),
             "max_publish_hz": 8.0,
             "angle_downsample": 2,
-            "slam_publish_hz": 5.0,
-            "slam_angle_downsample": 2,
-            # Dönüş sırasında SLAM'i aç bırak: scan matcher dönüş hatasını ancak
-            # tarama görürse düzeltebilir. 0.07 tüm dönüşleri susturuyordu →
-            # dönüş kayması odometriden birikip duvarları çiftliyordu.
-            # 0.65: otonom dönüşler (≤0.45 rad/s) ve yavaş manuel dönüşler geçer; çok hızlı spin (1.8) gate'lenir.
-            # 0.50 düşüktü — manuel çevirme sırasında SLAM hiç tarama alamıyordu → dönüş sonrası büyük açısal boşluk.
+            "slam_publish_hz": 2.5,
+            # 4 -> 2 -> 1. Downsampling is plain stride slicing
+            # (ranges[::n] in scan_restamper), so it throws away that
+            # fraction of the *valid* points too, and this lidar has none to
+            # spare. Measured 2026-08-11: it spins at 12.7 Hz, not the 10 Hz
+            # it reports, so at 4 kHz there are only ~315 samples for the 720
+            # angle_compensate bins, and only ~100 of those come back with a
+            # real return (~14% of the scan). Halving that again left SLAM
+            # matching against ~50 points per scan, which is why the map
+            # smeared into a radial fan instead of closing loops.
+            "slam_angle_downsample": 1,
+            # 0.07 -> 0.65: bu kadar düşük bir eşik robot ~4°/sn'den hızlı
+            # döndüğü an SLAM'a scan gitmesini tamamen kesiyordu — dönüş
+            # boyunca SLAM kör kalıyor, sadece dead-reckoning ile ilerliyor,
+            # dönüş bitince biriken hata haritaya tek seferde işleniyor ve
+            # düzeltilmiyordu ("harita kayması"). 0.65 daha önce doğrulanmış
+            # çalışan değer.
             "max_slam_angular_z": 0.65,
             "odom_topic": "/odom",
-            # A2M12 aralıklı olarak neredeyse boş tarama üretiyor (720'de 2-13
-            # geçerli ışın). Bunlar SLAM/costmap/keşfi zehirliyor — at.
-            "min_valid_fraction": 0.10,
+            # Whole rotations carry 150-400 valid points, fragments carry
+            # 0-25, and almost nothing lands in between — so 80 cleanly
+            # separates them with room to spare on both sides. About 38% of
+            # incoming scans pass, which is still ~5-6 whole scans/s, well
+            # above the 2.5 Hz SLAM path and 8 Hz costmap path below.
+            "min_valid_points": 80,
+            "slam_min_valid_points": 80,
         }],
     )
 

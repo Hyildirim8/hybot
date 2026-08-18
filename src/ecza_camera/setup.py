@@ -15,11 +15,10 @@ setup(
     zip_safe=True,
     maintainer='Emre Kabaoğlu',
     maintainer_email='hasan110400@gmail.com',
-    description='ESP32-CAM and RPi Camera Module (CSI) receivers for ecza-robotu',
+    description='RPi Camera Module (CSI) receiver for ecza-robotu',
     license='MIT',
     entry_points={
         'console_scripts': [
-            'esp32cam_node = ecza_camera.esp32cam_node:main',
             'rpicam_node = ecza_camera.rpicam_node:main',
         ],
     },

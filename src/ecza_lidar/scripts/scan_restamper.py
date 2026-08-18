@@ -31,7 +31,17 @@ class ScanRestamper(Node):
         self.declare_parameter("slam_angle_downsample", 4)
         self.declare_parameter("max_slam_angular_z", 0.25)
         self.declare_parameter("odom_topic", "/odom")
-        self.declare_parameter("min_valid_fraction", 0.10)
+        # Drop fragment scans (0 disables). The driver emits ~15 scan messages
+        # per second while the lidar only completes ~12.7 rotations, so some
+        # messages carry a slice of a rotation instead of a whole one. Measured
+        # 2026-08-11 over 310 scans: 51% arrived with 0-25 valid points and 38%
+        # with 150-400 — an almost empty middle. Publishing that mix makes
+        # scan matching alternate between good and useless input, which is what
+        # smeared the map. Gating on valid-point count keeps only whole
+        # rotations; the array length never changes, so slam_toolbox's
+        # first-scan laser registration still matches.
+        self.declare_parameter("min_valid_points", 0)
+        self.declare_parameter("slam_min_valid_points", 0)
 
         input_topic = self.get_parameter("input_topic").value
         output_topic = self.get_parameter("output_topic").value
@@ -45,8 +55,11 @@ class ScanRestamper(Node):
         )
         self._max_slam_angular_z = float(self.get_parameter("max_slam_angular_z").value)
         odom_topic = self.get_parameter("odom_topic").value
-        self._min_valid_fraction = float(self.get_parameter("min_valid_fraction").value)
-        self._dropped_scans = 0
+        self._min_valid_points = max(0, int(self.get_parameter("min_valid_points").value))
+        self._slam_min_valid_points = max(
+            0, int(self.get_parameter("slam_min_valid_points").value)
+        )
+        self._dropped_fragments = 0
         self._min_publish_ns = int(1e9 / max_publish_hz) if max_publish_hz > 0.0 else 0
         self._slam_min_publish_ns = (
             int(1e9 / slam_publish_hz) if slam_publish_hz > 0.0 else 0
@@ -78,11 +91,18 @@ class ScanRestamper(Node):
             f"max_publish_hz={max_publish_hz:.2f} angle_downsample={self._angle_downsample}; "
             f"{input_topic} -> {slam_output_topic} slam_publish_hz={slam_publish_hz:.2f} "
             f"slam_angle_downsample={self._slam_angle_downsample} "
-            f"max_slam_angular_z={self._max_slam_angular_z:.2f}"
+            f"max_slam_angular_z={self._max_slam_angular_z:.2f} "
+            f"min_valid_points={self._min_valid_points} "
+            f"slam_min_valid_points={self._slam_min_valid_points}"
         )
 
     def _odom_cb(self, msg: Odometry) -> None:
         self._angular_z = float(msg.twist.twist.angular.z)
+
+    def _valid_point_count(self, msg: LaserScan) -> int:
+        # inf/NaN both fail this comparison, so no isfinite() check is needed.
+        lo, hi = msg.range_min, msg.range_max
+        return sum(1 for r in msg.ranges if lo <= r <= hi)
 
     def _scan_cb(self, msg: LaserScan) -> None:
         # Sağlıksız tarama filtresi: geçerli ışın oranı eşiğin altındaysa hiç
@@ -104,19 +124,35 @@ class ScanRestamper(Node):
 
         now = self.get_clock().now()
         now_ns = now.nanoseconds
+
+        valid = -1
+        if self._min_valid_points or self._slam_min_valid_points:
+            valid = self._valid_point_count(msg)
+
+        # A fragment must not advance the rate limiters, otherwise it consumes
+        # the slot that the next whole rotation would have been published in.
+        scan_ok = valid < 0 or valid >= self._min_valid_points
+        slam_ok = valid < 0 or valid >= self._slam_min_valid_points
+        if not (scan_ok or slam_ok):
+            self._dropped_fragments += 1
+            self.get_logger().debug(
+                f"fragment scan atlandi ({valid} gecerli nokta; "
+                f"toplam {self._dropped_fragments})",
+                throttle_duration_sec=10.0,
+            )
+
+        publish_scan = scan_ok
         if self._min_publish_ns and now_ns - self._last_publish_ns < self._min_publish_ns:
             publish_scan = False
-        else:
-            publish_scan = True
-            self._last_publish_ns = now_ns
 
-        publish_slam = True
+        publish_slam = slam_ok
         if self._slam_min_publish_ns and now_ns - self._last_slam_publish_ns < self._slam_min_publish_ns:
             publish_slam = False
         if abs(self._angular_z) > self._max_slam_angular_z:
             publish_slam = False
 
         if publish_scan:
+            self._last_publish_ns = now_ns
             self._pub.publish(self._prepare_scan(msg, now, self._angle_downsample))
         if publish_slam:
             self._last_slam_publish_ns = now_ns

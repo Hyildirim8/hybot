@@ -3,14 +3,13 @@
 <package format="3">
   <name>ecza_camera</name>
   <version>0.1.0</version>
-  <description>ESP32-CAM raw binary serial receiver for ecza-robotu</description>
+  <description>RPi Camera Module (CSI) receiver for ecza-robotu</description>
   <maintainer email="hasan110400@gmail.com">Emre Kabaoğlu</maintainer>
   <license>MIT</license>
 
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
-  <depend>python3-serial</depend>
 
   <export>
     <build_type>ament_python</build_type>
