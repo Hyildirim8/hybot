@@ -50,7 +50,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from action_msgs.srv import CancelGoal
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import Joy, LaserScan
 from std_msgs.msg import Bool
 

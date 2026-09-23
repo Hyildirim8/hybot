@@ -71,13 +71,13 @@ wait_for_lifecycle_ready() {
 }
 
 wait_for_nav_services() {
-    wait_for_service "/controller_server" 120 &&
-    wait_for_service "/smoother_server"   120 &&
-    wait_for_service "/planner_server"    120 &&
-    wait_for_service "/behavior_server"   120 &&
-    wait_for_service "/bt_navigator"      120 &&
-    wait_for_service "/waypoint_follower" 120 &&
-    wait_for_service "/velocity_smoother" 120
+    wait_for_lifecycle_ready "controller_server" 120 &&
+    wait_for_lifecycle_ready "smoother_server"   120 &&
+    wait_for_lifecycle_ready "planner_server"    120 &&
+    wait_for_lifecycle_ready "behavior_server"   120 &&
+    wait_for_lifecycle_ready "bt_navigator"      120 &&
+    wait_for_lifecycle_ready "waypoint_follower" 120 &&
+    wait_for_lifecycle_ready "velocity_smoother" 120
 }
 
 wait_for_localization_ready() {
@@ -244,7 +244,7 @@ while [ "${attempt}" -lt 5 ]; do
         fi
     fi
 
-    if ! wait_for_nav_ready; then
+    if ! wait_for_nav_services; then
         echo "[navigation] nav nodes timed out" >&2
         kill_launch
         echo "[navigation] waiting 15s for DDS cleanup..."
