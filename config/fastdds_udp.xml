@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8" ?>
 <!--
   fastdds_udp.xml
-  Disables SHM transport, keeps builtin UDP transports for proper PDP discovery.
+  Disables SHM transport by replacing the builtin transports with a single
+  explicit UDPv4 user transport (multicast PDP discovery still works).
   Used by all ROS2 containers (network_mode: host).
 
   DO NOT add an <interfaceWhiteList>127.0.0.1</interfaceWhiteList> here.
@@ -33,6 +34,14 @@
   <participant profile_name="participant_profile" is_default_profile="true">
     <rtps>
       <useBuiltinTransports>false</useBuiltinTransports>
+      <!-- MUTLAKA GEREKLİ: useBuiltinTransports=false builtin SHM+UDP'yi
+           kapatır, bu yüzden katılımcıya açıkça bir taşıma vermek şart.
+           08b6d34 birleştirmesi bu bloğu düşürdü (iki ebeveynin ikisinde de
+           vardı) → katılımcı sıfır taşımayla oluşuyor ve tüm ROS grafiği
+           sessizce ölüyor. Çıkarmayın. -->
+      <userTransports>
+        <transport_id>udpv4</transport_id>
+      </userTransports>
       <builtin>
         <discovery_config>
           <!-- Ignore DDS participants living on OTHER machines, while leaving

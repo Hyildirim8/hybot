@@ -376,39 +376,6 @@ services:
       /joy /cmd_vel /cmd_vel_nav /wheel_velocities_cmd_f32 /wheel_velocities_cmd /odom /odometry/filtered /imu/data_raw /imu/mag /joint_states /diagnostics /scan /map /autonomous_mode"
 
   # ── ekf ───────────────────────────────────────────────────────────────────
-  # Extended Kalman Filter — fuses wheel-encoder odometry + GY-85 gyro.
-  # Replaces rf2o_lidar as the sole publisher of odom→base_link TF.
-  #
-  # Sources:
-  #   /odom          mecanum_drive_controller (50 Hz) — x, y, yaw, vx, vy, vyaw
-  #   /imu/data_raw  GY-85 ITG3205 gyro      (50 Hz) — angular velocity z (yaw rate)
-  #
-  # Publishes:
-  #   /odometry/filtered  nav_msgs/Odometry
-  #   odom → base_link    tf2  (slam_toolbox & Nav2 use this)
-  #
-  # controllers.yaml keeps enable_odom_tf: false — EKF is the sole TF owner.
-  ekf:
-    <<: *ros-service
-    profiles:
-      - nav
-    volumes:
-      - ./config/fastdds_udp.xml:/config/fastdds_udp.xml:ro
-      - ./config/ekf.yaml:/config/ekf.yaml:ro
-    command:
-      - ros2
-      - run
-      - robot_localization
-      - ekf_node
-      - --ros-args
-      - --params-file
-      - /config/ekf.yaml
-    restart: unless-stopped
-    depends_on:
-      - robot_description
-      - imu
-
-  # ── ekf ───────────────────────────────────────────────────────────────────
   # robot_localization EKF: fuses mecanum encoder odom (/odom) with the GY-85
   # gyro-z (/imu/data_raw) so the robot doesn't slip/drift relative to the
   # lidar while moving — publishes /odometry/filtered and owns the
