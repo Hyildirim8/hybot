@@ -8,10 +8,16 @@
   by it. Use it only when something off-robot genuinely needs to speak DDS —
   in practice that means the PC-side RViz viewer (scripts/rviz_viewer_pc.sh).
 
-  Select it per-launch, do not make it the default:
+  Select it per-launch, do not make it the default: pass the lan flag to
+  scripts/launch.sh alongside nav/lidar, or set
+  DDS_PROFILE=fastdds_lan.xml directly.
 
-      DDS_PROFILE=fastdds_lan.xml bash scripts/launch.sh --nav --lidar
-      bash scripts/launch.sh --nav --lidar --lan        # same thing
+  Exact copy-pasteable commands: README.md section 2, or the header of
+  scripts/rviz_viewer_pc.sh. They are deliberately not repeated here: an
+  XML comment may not contain a double hyphen, so spelling the flags out
+  verbatim makes this file invalid XML. Fast-DDS parses it with tinyxml2,
+  which tolerates the sequence and still loads the profile, but strict
+  parsers reject the whole file.
 
   TRADE-OFF, know it before using this: the default profile's host filter is
   what keeps a foreign robot on this LAN (it publishes /robot_description,
