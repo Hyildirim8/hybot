@@ -75,10 +75,37 @@ ekf_filter_node:
     # corridor gives it nothing to lock onto along the corridor axis). If the
     # estimate ever starts sliding in exactly such a place, that is the reason
     # — encoder velocities above are what carry the filter through it.
+    # RF2O raw covariance is empty (all zeros). The rf2o service now relays
+    # /odom_rf2o_raw here with nonzero covariance floors, so scan noise cannot
+    # act as an effectively exact pose measurement and override the gyro.
     odom1: /odom_rf2o
-    odom1_config: [true,  true,  false,    # x,  y,  z       (absolute, laser-derived)
-                   false, false, true,     # ro, pi, yaw     ← yaw from scan matching
-                   false, false, false,    # vx, vy, vz      (noisy — odom0 owns velocity)
+    # 2026-09-24: rf2o'nun MUTLAK POZ katkisi KAPATILDI (hepsi false).
+    # Olcum: robot 29.9 s boyunca tamamen hareketsizken (dort tekerlek de 0),
+    # rf2o 7.4 cm konum ve -4.69 deg yaw uretti -> 0.25 cm/s ve 0.158 deg/s,
+    # yani saatte ~9 m ve ~570 deg uydurma hareket. Duran robotta tarama
+    # eslestirici sifir bagil hareket vermek zorundadir; rf2o'nun girdisi
+    # /scan (360 isin, angle_downsample=2) ve isinlarin yalnizca ~%52'si
+    # gecerli, bu yuzden range-flow cozumu kotu kosullanmis.
+    # Sonucu: odom cercevesi sinirsiz kayiyordu (olculen map->odom oteleme
+    # x=+22 m, y=+11 m) ve slam_toolbox bunu 60 saniyede 19 sicramayla, en
+    # buyugu 494 cm olacak sekilde duzeltmek zorunda kaliyordu — kullanicinin
+    # "harita bir anda bambaska hale geldi" dedigi sey tam olarak bu.
+    #
+    # Artik odom cercevesi saf olu hesaplama: konum odom0'in vx/vy
+    # entegrasyonundan, yaw imu0'in gyro hizindan geliyor. Ikisi de
+    # dogrulanmis: tekerlek odometrisi 2026-08-13'te seritmetreyle kalibre
+    # (odom_linear_scale 0.650 / odom_angular_scale 0.504), gyro artik kaymasi
+    # hareketsizken 0.23 deg/s. Boyle bir odom TANIM GEREGI puruzsuz; mutlak
+    # duzeltme slam_toolbox'in map->odom isi, ki ROS'ta dogru mimari budur.
+    #
+    # GERI ALMAK ICIN: asagidaki satiri eski haline dondurun --
+    #   [true, true, false,  false, false, true,  false,...]
+    # Once rf2o'nun hareketsiz suruklenmesini duzeltin (tam cozunurluklu
+    # /scan_raw beslemek veya laser_odom_covariance.py'deki kovaryans
+    # tabanlarini yukseltmek), yoksa ayni sorun geri gelir.
+    odom1_config: [false, false, false,    # x,  y,  z       (KAPALI — uydurma poz)
+                   false, false, false,    # ro, pi, yaw     (KAPALI — uydurma yaw)
+                   false, false, false,    # vx, vy, vz      (odom0 hizi sahiplenir)
                    false, false, false,    # vro,vpi,vyaw
                    false, false, false]    # ax, ay, az
     odom1_queue_size: 2
