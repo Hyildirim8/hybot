@@ -117,7 +117,18 @@ controller_server:
     # metre KÖR sürüş demek — otonom modda doğrudan çarpma sebebi. Costmap ve
     # DWB transform_tolerance değerleri de 1.0'a çekildi, dolayısıyla TF
     # gecikmesine karşı tampon hâlâ var. MentorPi 0.3 kullanıyor.
-    failure_tolerance: 1.0
+    # 1.0 -> 4.0 (2daf0ff'teki MPPI icin secilmis deger).
+    # MPPI'ye gecisle birlikte 1.0'da birakmak hatali bir tercihti:
+    # optimizer dar koridorda/engel yakininda gecici olarak cozum
+    # bulamiyor ve 1 s icinde hedef abort ediliyordu. Olcum (20 dk,
+    # otonom kesif): 16 'Optimizer fail to compute path', 27 abort,
+    # 23 costmap temizleme -> robot surekli durup kaliyordu.
+    # 4.0, gecici hatalarin hedefi dusurmeden gecmesine izin verir;
+    # kalici hatada backup davranisi + costmap temizleme recovery'si
+    # zaten devrede. Takas: bu pencerede controller yeni gecerli komut
+    # uretmiyor, robot son komutla devam edebilir — 4 s en fazla ~3 m.
+    # Sorun cikarsa once 2.0 deneyin, 1.0'a geri donmeyin.
+    failure_tolerance: 4.0
     # Humble'da parametrenin adı TEKİL: progress_checker_plugin.
     # Çoğul biçim (progress_checker_plugins) Iron ile geldi; burada
     # tanımlanmadığı için sessizce yok sayılıyordu. Canlı doğrulama:
@@ -160,7 +171,11 @@ controller_server:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 18
       model_dt: 0.17          # must be >= 1/controller_frequency (1/6 ≈ 0.167)
-      batch_size: 600
+      # 600 -> 400: Pi 5'te tum stack (SLAM+EKF+rf2o+kamera+Nav2) ile
+      # yuk 5.0/4 cekirdek olculdu; MPPI 6 Hz deadline'ini kaciriyor ve
+      # bu da optimizer hatasi olarak geri donuyor. %33 az rollout,
+      # bu robotun hizi/boyutunda kalite kaybi kucuk.
+      batch_size: 400
       vx_std: 0.45             # wider sampling → more high-speed / escape trajectories explored
       vy_std: 0.35             # wider lateral sampling → better tight-corridor threading
       wz_std: 0.4
@@ -171,10 +186,14 @@ controller_server:
       wz_max:  0.65
       iteration_count: 1
       prune_distance: 1.7
-      # 4.0 -> 1.0: bayat TF ile plan yapmak, robotun ~3 m önce bulunduğu
-      # yer için yörünge örneklemek demek. Costmap'ler ve failure_tolerance
-      # da 1.0'da — TF gecikmesi tamponu hâlâ var.
-      transform_tolerance: 1.0
+      # 2daf0ff'te 4.0'di; DWB gerekcesiyle 1.0'a cekmek hataliydi. MPPI'de
+      # bu deger PathHandler'in global plani costmap cercevesine tasirken
+      # kullandigi TF toleransi — trajectory bayatligi degil. Pi 5'te yuk
+      # doygunken (olcum: load 5.0 / 4 cekirdek) ve map->odom seyrek
+      # guncellenirken 1.0 s asiliyor, PathHandler firlatiyor ve
+      # 'Optimizer fail to compute path' olarak gorunuyor. Olcum: 5 dk'da
+      # 44 hata / 80 abort. Yazarin test ettigi degere geri alindi.
+      transform_tolerance: 4.0
       temperature: 0.5         # was 0.3 — more exploration diversity, less warm-start bias on new goals
       gamma: 0.015
       motion_model: "Omni"     # holonomic: samples vx + vy + wz trajectories
