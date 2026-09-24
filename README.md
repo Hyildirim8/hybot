@@ -133,6 +133,76 @@ bash scripts/reset_map.sh            # SLAM haritasını sıfırla
 ```
 Kayıtlı haritalar `maps/` altına yazılır, `--map` ile geri yüklenir.
 
+### Otonom rota takibi
+
+Nav2 → hız yumuşatıcı → teleop güvenlik kapısı → mecanum kontrolcü akışında
+komutlar aynı gövde koordinatlarını kullanır: `+x` ileri, `+y` sol, `+z` dönüş
+saat yönünün tersidir. `auto_strafe_invert: false` kalmalıdır; yalnızca otonom
+komutu ters çevirmek kontrolcü ile odometriyi tutarsız hale getirir.
+
+Otonom hız sınırları ileri **0.50 m/s**, yanal **0.05 m/s**, dönüş **0.80 rad/s**.
+Hareket önceliği bilinçli olarak ileri/geri > dönüş > yan şeklindedir: ölçümde
+saf yanal komut robotu 13.3 cm ileri, yalnızca 3.0 cm yana götürdü, yani bu şasi
+yana düzgün gidemiyor. Bu yüzden MPPI'nin yanal örnekleme yetkisi kısıldı
+(`vy_max` 0.05, `vy_std` 0.03) ve `PreferForwardCritic` ağırlığı 5.0'a çıkarıldı —
+robot hedefe çapraz süzülmek yerine önce dönüp düz gidiyor. `velocity_smoother`
+limitleri MPPI ile birebir aynı olmalı, aksi halde komut kırpılır ve robot
+planladığından farklı hareket eder. Manuel dönüş `max_angular_speed: 1.8 rad/s`.
+Yerel costmap canlı lidar engellerini, global costmap haritayı da kullanır.
+RViz’de `GlobalCostmap` ve `LocalCostmap` varsayılan olarak gizlidir; `Map` ve
+rota çizgileri açıktır. Açık bir RViz oturumunda Displays panelinden bu iki
+katmanın işaretini kaldırabilirsiniz.
+Gövde sınırı yapılandırılmış tekerlek geometrisine göre 46 × 32 cm, ek pay
+her kenarda 1 cm’dir. Engel maliyeti yayılımı 35 cm’dir.
+Güvenlik kapısı tekerlekleri içeren gövdenin hareketini 0.6 saniye ileri kontrol
+eder; engele yaklaşan komutu sıfırlar, kendiliğinden kaçış dönüşü üretmez.
+Lidar veya navigasyon komutu 0.5 saniye boyunca güncel değilse robot durur.
+Bu mesafeler mevcut hız sınırlarına ve merkezde, 180° dönük lidar montajına göredir.
+
+Değişiklik sonrası fiziksel doğrulama: açık alanda önce kısa bir ileri hedef,
+sonra sola ve sağa hedef verin. RViz'deki hareket gerçek robotla aynı yönde olmalı;
+duvara yaklaşırken robot temas etmeden durmalı veya Nav2 yolu değiştirmelidir.
+Yönler uyuşmuyorsa motor/enkoder yönleri ve lidar TF'si birlikte ölçülmelidir.
+
+Motorlara mesaj göndermeyen regresyon testleri (ROS ortamında):
+
+```bash
+PYTHONPATH=src/ecza_teleop python3 -m unittest discover -s src/ecza_teleop/test -v
+```
+
+### Dönüş sırasında haritanın kayması
+
+Lidar filtresi ölçümün özgün zaman damgasını korur; yayın anıyla değiştirmez.
+SLAM'a dönüş sırasında da tarama gönderilir.
+
+Manuel dönüş limiti kullanıcı isteğiyle 0.6 → **1.8 rad/s** yapıldı (2026-09-24).
+TAKAS, bilerek kabul edildi: `/scan_slam` ~3 Hz yayınlandığı için ardışık iki
+tarama arasındaki açı farkı 0.6 rad/s'de ~11°, 1.8 rad/s'de ~34°'ye çıkar. Tarama
+eşleştirme örtüşme ister; 34° dar koridorda eşleştirmeyi zorlar ve haritanın
+dönüşte kayması geri gelebilir. Elle HARİTALARKEN yavaş dönün. Hızlı manuel
+dönüşle haritalamak gerekiyorsa `lidar.launch.py` içindeki `slam_publish_hz`
+değerini yükseltin (3.0 → 6.0; lidar zaten ~7 Hz üretiyor), bu tarama başına açıyı
+~17°'ye indirir ama CPU maliyeti vardır — yük hâlihazırda 4 çekirdekte 4-5
+seviyesinde ölçüldü.
+
+IMU, otomatik gyro sıfır düzeltmesini yalnızca güncel hareket komutu ve dört
+enkoder de duruş gösterirken yapar. IMU ilk başlarken robot yaklaşık 3 saniye
+sabit tutulmalıdır. RF2O'nun boş kovaryansı `/odom_rf2o_raw` → `/odom_rf2o`
+adaptöründe pozisyon ve açı belirsizliğiyle tamamlanır; EKF lazer odometrisini
+hatasız ölçüm olarak kabul etmez. Bu taban değerler ölçülmüş doğruluk değil,
+filtre ayarlarıdır.
+
+Sensör regresyon testleri ROS ortamında donanıma erişmeden çalışır:
+
+```bash
+python3 -m unittest discover -s scripts/tests -v
+```
+
+Bu düzeltmeler daha önce bozulmuş haritayı temizlemez. Yeni harita oluşturmadan
+önce mevcut haritayı kaydedin; temiz haritada kısa sağ/sol dönüşlerle duvarların
+üst üste kaldığını doğrulayın. Hazır haritada yalnızca navigasyon yapılacaksa
+`--nav --map /maps/harita.yaml` kullanın.
+
 ---
 
 ## 2. PC'den çalıştırma

@@ -216,7 +216,7 @@ Visualization Manager:
       Alpha: 0.4
       Color Scheme: costmap
       Draw Behind: false
-      Enabled: true
+      Enabled: false
       Name: GlobalCostmap
       Topic:
         Depth: 1
@@ -233,14 +233,14 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /global_costmap/costmap_updates
       Use Timestamp: false
-      Value: true
+      Value: false
 
     # ── Local costmap ────────────────────────────────────────────────────
     - Class: rviz_default_plugins/Map
       Alpha: 0.55
       Color Scheme: costmap
       Draw Behind: false
-      Enabled: true
+      Enabled: false
       Name: LocalCostmap
       Topic:
         Depth: 1
@@ -257,7 +257,7 @@ Visualization Manager:
         Reliability Policy: Reliable
         Value: /local_costmap/costmap_updates
       Use Timestamp: false
-      Value: true
+      Value: false
 
     # ── Global plan (Nav2 planner output) ────────────────────────────────
     - Class: rviz_default_plugins/Path

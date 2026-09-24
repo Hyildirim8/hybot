@@ -90,17 +90,19 @@ class TeleopNode(Node):
         self.declare_parameter("joy_watchdog_timeout_ms", 500)
         self.declare_parameter("reject_extreme_axis_startup", True)
         self.declare_parameter("enable_scan_safety", True)
-        self.declare_parameter("enable_scan_safety_in_auto", False)
         self.declare_parameter("scan_topic", "/scan")
         self.declare_parameter("front_obstacle_stop_distance", 0.45)
         self.declare_parameter("front_obstacle_clear_distance", 0.75)
         self.declare_parameter("front_obstacle_angle_deg", 35.0)
-        self.declare_parameter("auto_emergency_stop_distance", 0.30)
-        self.declare_parameter("avoidance_turn_speed", 0.8)
-        self.declare_parameter("avoidance_strafe_speed", 0.25)
         self.declare_parameter("lidar_angle_offset_deg", 0.0)
         self.declare_parameter("strafe_invert", False)
         self.declare_parameter("auto_strafe_invert", False)
+        self.declare_parameter("nav_watchdog_timeout", 0.5)
+        self.declare_parameter("scan_timeout", 0.5)
+        self.declare_parameter("auto_half_length", 0.23)
+        self.declare_parameter("auto_half_width", 0.16)
+        self.declare_parameter("auto_obstacle_margin", 0.01)
+        self.declare_parameter("auto_collision_horizon", 0.6)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -154,9 +156,6 @@ class TeleopNode(Node):
             self.get_parameter("reject_extreme_axis_startup").value
         )
         self._enable_scan_safety = bool(self.get_parameter("enable_scan_safety").value)
-        self._enable_scan_safety_in_auto = bool(
-            self.get_parameter("enable_scan_safety_in_auto").value
-        )
         self._scan_topic = self.get_parameter("scan_topic").value
         self._front_stop_distance = float(
             self.get_parameter("front_obstacle_stop_distance").value
@@ -167,15 +166,6 @@ class TeleopNode(Node):
         self._front_angle_rad = math.radians(
             float(self.get_parameter("front_obstacle_angle_deg").value)
         )
-        self._auto_emergency_stop_dist = float(
-            self.get_parameter("auto_emergency_stop_distance").value
-        )
-        self._avoidance_turn_speed = float(
-            self.get_parameter("avoidance_turn_speed").value
-        )
-        self._avoidance_strafe_speed = float(
-            self.get_parameter("avoidance_strafe_speed").value
-        )
         self._lidar_angle_offset_rad = math.radians(
             float(self.get_parameter("lidar_angle_offset_deg").value)
         )
@@ -183,6 +173,15 @@ class TeleopNode(Node):
         self._auto_strafe_invert = bool(
             self.get_parameter("auto_strafe_invert").value
         )
+        self._nav_timeout = float(self.get_parameter("nav_watchdog_timeout").value)
+        self._scan_timeout = float(self.get_parameter("scan_timeout").value)
+        self._auto_half_length = float(self.get_parameter("auto_half_length").value)
+        self._auto_half_width = float(self.get_parameter("auto_half_width").value)
+        self._auto_margin = float(self.get_parameter("auto_obstacle_margin").value)
+        self._auto_horizon = float(self.get_parameter("auto_collision_horizon").value)
+        self._last_nav_time = 0.0
+        self._last_scan_time = 0.0
+        self._scan_points = []
         timeout_ms = self.get_parameter("joy_watchdog_timeout_ms").value
 
         # ── Autonomous mode state ─────────────────────────────────────────
@@ -281,7 +280,7 @@ class TeleopNode(Node):
         # ── Watchdog timer ────────────────────────────────────────────────
         self._last_joy = self.get_clock().now()
         self._watchdog = self.create_timer(
-            timeout_ms / 1000.0, self._watchdog_cb
+            min(0.1, timeout_ms / 1000.0), self._watchdog_cb
         )
 
         self.get_logger().info(
@@ -295,7 +294,7 @@ class TeleopNode(Node):
             f"require_enable={self._require_en}, "
             f"reject_extreme_axis_startup={self._reject_extreme_axis_startup}, "
             f"scan_safety={self._enable_scan_safety}({self._scan_topic}, "
-            f"auto={self._enable_scan_safety_in_auto}, "
+            f"auto=swept_footprint, "
             f"stop={self._front_stop_distance:.2f}m, clear={self._front_clear_distance:.2f}m, "
             f"front={math.degrees(self._front_angle_rad):.0f}deg), "
             f"strafe_invert={self._strafe_invert}, "
@@ -375,6 +374,14 @@ class TeleopNode(Node):
         return idx >= 0 and idx < len(msg.buttons) and bool(msg.buttons[idx])
 
     def _scan_cb(self, msg: LaserScan) -> None:
+        # Reject delayed scans as well as a missing scan stream. The rover's
+        # laser is centred on base_link; its mounting yaw is configured below.
+        stamp = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        age = self.get_clock().now().nanoseconds * 1e-9 - stamp
+        self._last_scan_time = 0.0
+        self._scan_points = []
+        if not math.isfinite(age) or age > self._scan_timeout or age < -0.2:
+            return
         min_distance = math.inf
         left_clearance = math.inf
         right_clearance = math.inf
@@ -402,6 +409,8 @@ class TeleopNode(Node):
                 continue
             if distance < max(0.0, msg.range_min) or distance > msg.range_max:
                 continue
+            self._scan_points.append((distance * math.cos(shifted),
+                                      distance * math.sin(shifted)))
 
             if in_front:
                 front_valid += 1
@@ -433,41 +442,60 @@ class TeleopNode(Node):
             self._front_blocked = False
         self._left_clearance = left_clearance
         self._right_clearance = right_clearance
+        if self._scan_points:
+            self._last_scan_time = time.monotonic() - max(0.0, age)
+
+    def _auto_scan_safe(self, twist: Twist) -> bool:
+        """Check the requested body motion against a swept, padded rectangle.
+
+        This gate only stops commands; it never invents a turn or strafe that
+        Nav2 did not collision-check. All directions, including pure rotation
+        and reverse recovery, use the same robot footprint.
+        """
+        vx, vy, wz = twist.linear.x, twist.linear.y, twist.angular.z
+        if not all(math.isfinite(v) for v in (vx, vy, wz)):
+            return False
+        if not self._twist_has_motion(twist):
+            return True
+        if time.monotonic() - self._last_scan_time > self._scan_timeout:
+            return False
+        length = self._auto_half_length + self._auto_margin
+        width = self._auto_half_width + self._auto_margin
+        reach = math.hypot(length, width) + math.hypot(vx, vy) * self._auto_horizon
+        points = [(x, y) for x, y in self._scan_points if math.hypot(x, y) <= reach]
+        for step in range(1, 13):
+            t = self._auto_horizon * step / 12.0
+            yaw = wz * t
+            c, s = math.cos(yaw), math.sin(yaw)
+            if abs(wz) < 1e-6:
+                dx, dy = vx * t, vy * t
+            else:
+                dx = (vx * s + vy * (c - 1.0)) / wz
+                dy = (vx * (1.0 - c) + vy * s) / wz
+            for x, y in points:
+                px, py = c * (x - dx) + s * (y - dy), -s * (x - dx) + c * (y - dy)
+                clearance = max(abs(px) - length, abs(py) - width)
+                if clearance > 0.0:
+                    continue
+                initial = max(abs(x) - length, abs(y) - width)
+                # Permit straight retreat from an already close obstacle,
+                # only when clearance improves; turning there can sweep a corner.
+                if initial <= 0.0 and abs(wz) < 1e-6 and clearance > initial + 1e-6:
+                    continue
+                return False
+        return True
 
     def _apply_scan_safety(self, twist: Twist) -> Twist:
         if not self._enable_scan_safety:
             return twist
 
         if self._autonomous:
-            if self._enable_scan_safety_in_auto and twist.linear.x > 0.0 and self._front_blocked:
-                safe = Twist()
-                safe.linear.x = 0.0
-                safe.linear.y = twist.linear.y
-                turn_dir = 1.0 if self._left_clearance >= self._right_clearance else -1.0
-                requested_turn = twist.angular.z
-                if abs(requested_turn) < self._avoidance_turn_speed:
-                    requested_turn = turn_dir * self._avoidance_turn_speed
-                safe.angular.z = requested_turn
+            if not self._auto_scan_safe(twist):
                 self.get_logger().warn(
-                    f"AUTO ön engel {self._front_obstacle_distance:.2f}m; ileri kesildi, açık tarafa dönülüyor "
-                    f"(sol={self._left_clearance:.2f}m sağ={self._right_clearance:.2f}m)",
-                    throttle_duration_sec=1.0,
+                    "AUTO durduruldu: hareket yönünde engel veya güncel lidar verisi yok",
+                    throttle_duration_sec=2.0,
                 )
-                return safe
-
-            # Emergency stop remains as a second layer for very close obstacles.
-            if twist.linear.x > 0.0 and self._front_obstacle_distance <= self._auto_emergency_stop_dist:
-                safe = Twist()
-                safe.linear.x = 0.0
-                safe.linear.y = twist.linear.y
-                turn_dir = 1.0 if self._left_clearance >= self._right_clearance else -1.0
-                safe.angular.z = turn_dir * self._avoidance_turn_speed
-                self.get_logger().warn(
-                    f"AUTO acil durum dur: önde {self._front_obstacle_distance:.2f}m "
-                    f"(insan/dinamik engel); açık tarafa dönülüyor",
-                    throttle_duration_sec=1.0,
-                )
-                return safe
+                return Twist()
             return twist
 
         # Teleop mode: normal scan safety with configured threshold.
@@ -651,6 +679,7 @@ class TeleopNode(Node):
             self.get_logger().info("Keşif açıldı (A) -> AUTONOMOUS (Nav2)")
 
     def _nav_cmd_cb(self, msg: Twist) -> None:
+        self._last_nav_time = time.monotonic()
         if self._twist_has_motion(msg):
             self._last_nav_motion_time = time.monotonic()
 
@@ -701,9 +730,14 @@ class TeleopNode(Node):
                     "Nav2 sustu — yeni hedefle otomatik AUTO geçişi tekrar aktif"
                 )
 
-        # In AUTO mode, Nav2 commands are forwarded from _nav_cmd_cb, so the
-        # joy watchdog must not inject zero commands.
+        # AUTO needs its own watchdog; joystick traffic cannot keep an old
+        # navigation command alive after Nav2 or the lidar stream disappears.
         if self._autonomous:
+            now = time.monotonic()
+            if (now - self._last_nav_time > self._nav_timeout
+                    or (self._enable_scan_safety
+                        and now - self._last_scan_time > self._scan_timeout)):
+                self._publish_zero()
             return
         elapsed = (self.get_clock().now() - self._last_joy).nanoseconds * 1e-9
         timeout = self.get_parameter("joy_watchdog_timeout_ms").value / 1000.0

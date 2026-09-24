@@ -58,11 +58,8 @@ slam_toolbox:
     # are. Both MentorPi and the slam_toolbox default are true.
     use_scan_barycenter: true
     minimum_travel_distance: 0.12   # RPi CPU dengesi: çok sık tarama işleme
-    # 0.45 -> 0.10: SLAM'ı dönüş sırasında bloke ederek kaymayı "önlemeye"
-    # çalışmak ters etki yaptı — dönüş sırasında hiç güncelleme yapılmayınca
-    # dead-reckoning hatası biriktikten sonra tek seferde haritaya işleniyordu.
-    # 0.10 daha önce doğrulanmış çalışan değer (max_slam_angular_z: 0.65 ile
-    # birlikte, bkz. lidar.launch.py).
+    # Continue matching intermediate scans while rotating. Scan filtering no
+    # longer gates on wheel yaw, and manual turns are capped at 0.6 rad/s.
     minimum_travel_heading: 0.10
     # 10 -> 20 (MentorPi'deki değer). Bu tampon, yeni taramanın eşleştirildiği
     # "running scan" zincirinin uzunluğu. SLAM'a giden akış zaten 2.2 Hz, yani

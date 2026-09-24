@@ -63,7 +63,7 @@ def generate_launch_description() -> LaunchDescription:
             "frame_id": LaunchConfiguration("frame_id"),
             "max_publish_hz": 8.0,
             "angle_downsample": 2,
-            "slam_publish_hz": 2.5,
+            "slam_publish_hz": 3.0,
             # 4 -> 2 -> 1. Downsampling is plain stride slicing
             # (ranges[::n] in scan_restamper), so it throws away that
             # fraction of the *valid* points too, and this lidar has none to
@@ -74,14 +74,7 @@ def generate_launch_description() -> LaunchDescription:
             # matching against ~50 points per scan, which is why the map
             # smeared into a radial fan instead of closing loops.
             "slam_angle_downsample": 1,
-            # 0.07 -> 0.65: bu kadar düşük bir eşik robot ~4°/sn'den hızlı
-            # döndüğü an SLAM'a scan gitmesini tamamen kesiyordu — dönüş
-            # boyunca SLAM kör kalıyor, sadece dead-reckoning ile ilerliyor,
-            # dönüş bitince biriken hata haritaya tek seferde işleniyor ve
-            # düzeltilmiyordu ("harita kayması"). 0.65 daha önce doğrulanmış
-            # çalışan değer.
-            "max_slam_angular_z": 0.65,
-            "odom_topic": "/odom",
+            # No angular-speed gate: SLAM must see intermediate turn scans.
             # Whole rotations carry 150-400 valid points, fragments carry
             # 0-25, and almost nothing lands in between — so 80 cleanly
             # separates them with room to spare on both sides. About 38% of

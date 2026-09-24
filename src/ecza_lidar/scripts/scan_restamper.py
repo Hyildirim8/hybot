@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Restamp LaserScan messages so TF consumers do not reject stale scan times.
+"""Filter LaserScan messages while preserving their acquisition timestamps.
 
 Also drops unhealthy scans: the A2M12 on this rover intermittently produces
 near-empty revolutions (2-13 valid rays out of 720). Publishing those poisons
@@ -15,7 +15,6 @@ import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
-from nav_msgs.msg import Odometry
 from sensor_msgs.msg import LaserScan
 
 
@@ -30,8 +29,6 @@ class ScanRestamper(Node):
         self.declare_parameter("angle_downsample", 2)
         self.declare_parameter("slam_publish_hz", 2.0)
         self.declare_parameter("slam_angle_downsample", 4)
-        self.declare_parameter("max_slam_angular_z", 0.25)
-        self.declare_parameter("odom_topic", "/odom")
         # Drop fragment scans (0 disables). The driver emits ~15 scan messages
         # per second while the lidar only completes ~12.7 rotations, so some
         # messages carry a slice of a rotation instead of a whole one. Measured
@@ -54,8 +51,6 @@ class ScanRestamper(Node):
         self._slam_angle_downsample = max(
             1, int(self.get_parameter("slam_angle_downsample").value)
         )
-        self._max_slam_angular_z = float(self.get_parameter("max_slam_angular_z").value)
-        odom_topic = self.get_parameter("odom_topic").value
         self._min_valid_points = max(0, int(self.get_parameter("min_valid_points").value))
         self._slam_min_valid_points = max(
             0, int(self.get_parameter("slam_min_valid_points").value)
@@ -67,7 +62,6 @@ class ScanRestamper(Node):
         )
         self._last_publish_ns = 0
         self._last_slam_publish_ns = 0
-        self._angular_z = 0.0
 
         sensor_qos = QoSProfile(
             depth=1,
@@ -86,19 +80,14 @@ class ScanRestamper(Node):
         self._pub = self.create_publisher(LaserScan, output_topic, pub_qos)
         self._slam_pub = self.create_publisher(LaserScan, slam_output_topic, pub_qos)
         self.create_subscription(LaserScan, input_topic, self._scan_cb, sensor_qos)
-        self.create_subscription(Odometry, odom_topic, self._odom_cb, sensor_qos)
         self.get_logger().info(
             f"scan_restamper {input_topic} -> {output_topic} "
             f"max_publish_hz={max_publish_hz:.2f} angle_downsample={self._angle_downsample}; "
             f"{input_topic} -> {slam_output_topic} slam_publish_hz={slam_publish_hz:.2f} "
             f"slam_angle_downsample={self._slam_angle_downsample} "
-            f"max_slam_angular_z={self._max_slam_angular_z:.2f} "
             f"min_valid_points={self._min_valid_points} "
             f"slam_min_valid_points={self._slam_min_valid_points}"
         )
-
-    def _odom_cb(self, msg: Odometry) -> None:
-        self._angular_z = float(msg.twist.twist.angular.z)
 
     def _valid_point_count(self, msg: LaserScan) -> int:
         # inf/NaN both fail this comparison, so no isfinite() check is needed.
@@ -140,21 +129,23 @@ class ScanRestamper(Node):
         publish_slam = slam_ok
         if self._slam_min_publish_ns and now_ns - self._last_slam_publish_ns < self._slam_min_publish_ns:
             publish_slam = False
-        if abs(self._angular_z) > self._max_slam_angular_z:
-            publish_slam = False
+        # Keep supplying scans during turns. Suppressing them until a turn
+        # ends loses the overlap needed to match the next scan to the map.
 
         if publish_scan:
             self._last_publish_ns = now_ns
-            self._pub.publish(self._prepare_scan(msg, now, self._angle_downsample))
+            self._pub.publish(self._prepare_scan(msg, self._angle_downsample))
         if publish_slam:
             self._last_slam_publish_ns = now_ns
             self._slam_pub.publish(
-                self._prepare_scan(msg, now, self._slam_angle_downsample)
+                self._prepare_scan(msg, self._slam_angle_downsample)
             )
 
-    def _prepare_scan(self, msg: LaserScan, now, downsample: int) -> LaserScan:
+    def _prepare_scan(self, msg: LaserScan, downsample: int) -> LaserScan:
         out = copy.deepcopy(msg)
-        out.header.stamp = now.to_msg()
+        # TF must use the pose when the measurement was acquired, not when
+        # this callback runs (driver/serial latency was 60-130 ms on this rover).
+        # deepcopy preserves header.stamp, scan_time and first-ray timing.
         if self._frame_id:
             out.header.frame_id = self._frame_id
         # Convert range_max sentinel to inf (ROS REP-117 convention).

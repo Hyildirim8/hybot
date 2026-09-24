@@ -35,29 +35,15 @@ Parameters:
                                              starts nudging
   gyro_bias_adapt_rate     float  0.005     EMA weight applied per sample
                                              while continuously tracking bias
-  gyro_still_abs_max       float  0.6       rad/s — in addition to the spread
-                                             test, the RAW reading's mean over
-                                             the window must stay under this
-                                             on all 3 axes. Spread alone can't
-                                             tell "not moving" apart from
-                                             "rotating at a constant rate", and
-                                             a motor-driven in-place turn holds
-                                             a far steadier rate than a hand
-                                             ever would — see _track_bias. Kept
-                                             well above the sensor's own
-                                             resting bias, which is NOT close
-                                             to zero and drifts a lot between
-                                             boots: ~-0.14 rad/s measured
-                                             2026-08-01, ~-0.36 rad/s measured
-                                             2026-08-11 on the same Z axis (see
-                                             imu-ekf-integration memory, "gyro
-                                             bias drift recurs"). A tight bound
-                                             here would reject genuine
-                                             stillness and reintroduce the
-                                             relock-lockout bug fixed in
-                                             _track_bias's history.
+  gyro_still_abs_max       float  0.6       rad/s — bound on raw gyro mean.
+
+Bias adaptation additionally requires fresh zero /cmd_vel and stationary
+/wheel_velocities feedback. A constant-rate motor turn must never be learned
+as the sensor's zero. Startup calibration still requires a stationary robot.
+
 """
 
+import math
 import struct
 from collections import deque
 import time
@@ -67,7 +53,8 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Imu, MagneticField
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Float32MultiArray
+from geometry_msgs.msg import Twist
 
 # ── I2C addresses ──────────────────────────────────────────────────────────────
 ADXL_ADDR  = 0x53
@@ -140,6 +127,11 @@ class GY85Node(Node):
         # (spread), independent of still_duration_s — see _track_bias.
         self._raw_window = deque(maxlen=max(2, int(0.4 * rate_hz)))
 
+        self._last_command_time = 0.0
+        self._last_wheel_time = 0.0
+        self._command_still = False
+        self._wheels_still = False
+
         self.bus = smbus.SMBus(bus_num)
         self._init_sensors()
         self._gyro_bias = self._calibrate_gyro(cal_samples)
@@ -164,6 +156,10 @@ class GY85Node(Node):
         self.pub_imu = self.create_publisher(Imu,           'imu/data_raw', qos)
         self.pub_mag = self.create_publisher(MagneticField, 'imu/mag',      qos)
 
+        # A steady gyro signal can be a steady turn. Adapt bias only with
+        # independent, fresh evidence that both commands and wheels are idle.
+        self.create_subscription(Twist, '/cmd_vel', self._command_cb, qos)
+        self.create_subscription(Float32MultiArray, '/wheel_velocities', self._wheel_cb, qos)
         self.create_timer(1.0 / rate_hz, self._cb)
         self.get_logger().info(
             f'GY-85 on /dev/i2c-{bus_num} | frame={self.frame} | {rate_hz:.0f} Hz')
@@ -255,40 +251,34 @@ class GY85Node(Node):
         self._track_bias((x, y, z), (cx, cy, cz))
         return cx, cy, cz
 
+    def _command_cb(self, msg):
+        values = (msg.linear.x, msg.linear.y, msg.angular.z)
+        self._command_still = all(math.isfinite(v) and abs(v) < 0.01 for v in values)
+        self._last_command_time = time.monotonic()
+        if not self._command_still:
+            self._reset_bias_tracking()
+
+    def _wheel_cb(self, msg):
+        self._wheels_still = (len(msg.data) == 4 and
+                             all(math.isfinite(v) and abs(v) < 0.15 for v in msg.data))
+        self._last_wheel_time = time.monotonic()
+        if not self._wheels_still:
+            self._reset_bias_tracking()
+
+    def _reset_bias_tracking(self):
+        self._still_count = 0
+        self._raw_window.clear()
+
     def _track_bias(self, raw, corrected) -> None:
-        # This ITG3205 doesn't hold a fixed bias — measured a shift of
-        # ~0.1 rad/s within seconds of the one-time startup calibration
-        # (see imu-ekf-integration memory, 2026-08-01), which is enough to
-        # integrate into several fake full turns of yaw drift within a
-        # couple of minutes.
-        #
-        # 2026-08-01 v2: the first version of this gated adaptation on the
-        # CORRECTED reading staying near zero. That's circular — once the
-        # true bias has drifted far enough that the corrected reading no
-        # longer looks "still", the tracker can never re-lock, because its
-        # own stillness test depends on the bias estimate it's trying to
-        # fix. Confirmed live: bias drifted back to ~-0.12 rad/s and stayed
-        # there, un-adapted, for the rest of the session.
-        #
-        # Fixed by testing "stillness" on the RAW signal's short-term
-        # SPREAD (max-min over a small rolling window) instead of its
-        # absolute value — a call this can't get wrong regardless of how
-        # stale the current bias estimate is: a raw reading that isn't
-        # *changing* means angular velocity isn't changing, which is true
-        # whether the current bias guess is 0 or wildly off. A real hand
-        # rotation's onset (acceleration) breaks this immediately; a sustained
-        # hand turn at a genuinely constant rate could in theory slip through,
-        # but that's not how hand-turns actually happen in practice.
-        #
-        # 2026-08-11: that residual risk turned out to be real for a
-        # MOTOR-driven in-place turn, which holds a far steadier rate than a
-        # hand ever would (SLAM/Nav2 spin, joystick pivot). Added a second
-        # gate on the raw mean's absolute magnitude (gyro_still_abs_max) to
-        # catch that case. It deliberately stays far from zero — this
-        # sensor's genuine at-rest raw output isn't close to zero and drifts
-        # a lot between boots (~-0.14 rad/s one boot, ~-0.36 rad/s another —
-        # see gyro_still_abs_max docstring) — a tight bound here reintroduces
-        # the exact relock-lockout bug fixed above, just via a different gate.
+        # Never learn a commanded/motor-driven rotation as the gyro's zero.
+        # Missing feedback also disables adaptation, rather than implying rest.
+        now = time.monotonic()
+        if (not self._command_still or not self._wheels_still
+                or now - self._last_command_time > 0.5
+                or now - self._last_wheel_time > 0.5
+                or not all(math.isfinite(v) for v in raw)):
+            self._reset_bias_tracking()
+            return
         self._raw_window.append(raw)
         if len(self._raw_window) < self._raw_window.maxlen:
             return
