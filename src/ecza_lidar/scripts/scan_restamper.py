@@ -3,9 +3,10 @@
 
 Also drops unhealthy scans: the A2M12 on this rover intermittently produces
 near-empty revolutions (2-13 valid rays out of 720). Publishing those poisons
-SLAM matching, costmap marking and the explorer's distance estimates, so any
-scan with fewer than min_valid_fraction valid rays is discarded — consumers
-keep working from the last healthy scan.
+SLAM matching, costmap marking and the explorer's distance estimates, so a
+scan with fewer than min_valid_points valid rays is not published on /scan,
+and fewer than slam_min_valid_points is not published on /scan_slam —
+consumers keep working from the last healthy scan.
 """
 
 import copy
@@ -105,23 +106,14 @@ class ScanRestamper(Node):
         return sum(1 for r in msg.ranges if lo <= r <= hi)
 
     def _scan_cb(self, msg: LaserScan) -> None:
-        # Sağlıksız tarama filtresi: geçerli ışın oranı eşiğin altındaysa hiç
-        # yayınlama — SLAM/costmap/keşif son sağlıklı taramayla devam eder.
-        if self._min_valid_fraction > 0.0 and msg.ranges:
-            lo = max(0.0, msg.range_min)
-            valid = sum(
-                1 for d in msg.ranges
-                if math.isfinite(d) and lo <= d < msg.range_max
-            )
-            if valid < len(msg.ranges) * self._min_valid_fraction:
-                self._dropped_scans += 1
-                self.get_logger().warn(
-                    f"Bozuk tarama atıldı: {valid}/{len(msg.ranges)} geçerli ışın "
-                    f"(toplam atılan: {self._dropped_scans})",
-                    throttle_duration_sec=10.0,
-                )
-                return
-
+        # Sağlıksız tarama filtresi aşağıda, _min_valid_points /
+        # _slam_min_valid_points ile yapılıyor. 08b6d34 birleştirmesi buraya
+        # aynı işi yapan ikinci bir blok koymuştu (_min_valid_fraction), ama o
+        # parametre hiç bildirilmemiş/atanmamıştı: node ilk taramada
+        # AttributeError ile ölüyordu, /scan ve /scan_slam hiç yayınlanmıyordu.
+        # Kaldırıldı — alttaki filtre zaten daha yetenekli: /scan ve /scan_slam
+        # için ayrı eşik uyguluyor ve parça taramada hız limitleyicisini
+        # ilerletmiyor.
         now = self.get_clock().now()
         now_ns = now.nanoseconds
 
