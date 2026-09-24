@@ -1,16 +1,6 @@
-# nav2_params.yaml — Nav2 tuning for ecza-robotu 4-wheel mecanum rover.
-#
-# Robot footprint: ~0.38 m × 0.26 m
-# Max speed: 1.5 m/s linear, 3.0 rad/s angular
-# Sensor: RPLidar A2M12 — 360°, 12 m range, ~10 Hz
-#
-# Planner:  NavFn (global) — reliable A* global planner
-# Controller: DWB (local)  — dynamic window approach, good on flat ground
-#             RPP (alternative, uncomment below) — Regulated Pure Pursuit,
-#             smoother paths, better for narrow corridors
-#
-# To switch to RPP:  comment DWB block, uncomment RPP block below.
-# ---------------------------------------------------------------------------
+# Nav2 for the mecanum rover. MPPI uses the same REP-103 body frame as
+# ros2_control and teleop. Conservative limits keep combined wheel commands
+# below 18.75 rad/s at r=0.04 m: vx + |vy| + 0.32*|wz| <= 0.75 m/s.
 
 amcl:
   ros__parameters:
@@ -112,23 +102,9 @@ controller_server:
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.001     # non-zero: mecanum can strafe
     min_theta_velocity_threshold: 0.001
-    # 5.0 -> 1.0. Bu, controller geçerli bir komut üretemediğinde robotun SON
-    # komutla ne kadar süre sürmeye devam edeceği. 5 saniye, 0.75 m/s'de ~3.7
-    # metre KÖR sürüş demek — otonom modda doğrudan çarpma sebebi. Costmap ve
-    # DWB transform_tolerance değerleri de 1.0'a çekildi, dolayısıyla TF
-    # gecikmesine karşı tampon hâlâ var. MentorPi 0.3 kullanıyor.
-    # 1.0 -> 4.0 (2daf0ff'teki MPPI icin secilmis deger).
-    # MPPI'ye gecisle birlikte 1.0'da birakmak hatali bir tercihti:
-    # optimizer dar koridorda/engel yakininda gecici olarak cozum
-    # bulamiyor ve 1 s icinde hedef abort ediliyordu. Olcum (20 dk,
-    # otonom kesif): 16 'Optimizer fail to compute path', 27 abort,
-    # 23 costmap temizleme -> robot surekli durup kaliyordu.
-    # 4.0, gecici hatalarin hedefi dusurmeden gecmesine izin verir;
-    # kalici hatada backup davranisi + costmap temizleme recovery'si
-    # zaten devrede. Takas: bu pencerede controller yeni gecerli komut
-    # uretmiyor, robot son komutla devam edebilir — 4 s en fazla ~3 m.
-    # Sorun cikarsa once 2.0 deneyin, 1.0'a geri donmeyin.
-    failure_tolerance: 4.0
+    # Retry transient controller failures briefly. Nav2 publishes zero on
+    # recoverable controller exceptions; the teleop watchdog handles silence.
+    failure_tolerance: 1.0
     # Humble'da parametrenin adı TEKİL: progress_checker_plugin.
     # Çoğul biçim (progress_checker_plugins) Iron ile geldi; burada
     # tanımlanmadığı için sessizce yok sayılıyordu. Canlı doğrulama:
@@ -159,46 +135,40 @@ controller_server:
       # final heading makes the rover spin in place around otherwise valid goals.
       yaw_goal_tolerance: 3.14
 
-    # ── MPPI Local Planner (Model Predictive Path Integral) ───────────────
-    # State-of-the-art Nav2 controller. Samples trajectory rollouts each
-    # cycle, weights by cost, blends into a smooth command — no stop-and-replan.
-    # motion_model: "Omni" enables vy sampling for mecanum holonomic motion.
-    # batch_size/time_steps reduced from 1000/24 — RPi5 is CPU-oversubscribed
-    # with the full stack (SLAM + EKF + IMU + camera + nav all concurrent);
-    # 600x18 (~55% fewer rollouts) frees real headroom with minimal quality
-    # loss at this robot's speed/size.
+    # MPPI Omni: 3.06 s prediction at 6 Hz, bounded for the Pi's CPU budget.
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
       time_steps: 18
       model_dt: 0.17          # must be >= 1/controller_frequency (1/6 ≈ 0.167)
-      # 600 -> 400: Pi 5'te tum stack (SLAM+EKF+rf2o+kamera+Nav2) ile
-      # yuk 5.0/4 cekirdek olculdu; MPPI 6 Hz deadline'ini kaciriyor ve
-      # bu da optimizer hatasi olarak geri donuyor. %33 az rollout,
-      # bu robotun hizi/boyutunda kalite kaybi kucuk.
       batch_size: 400
-      vx_std: 0.45             # wider sampling → more high-speed / escape trajectories explored
-      vy_std: 0.35             # wider lateral sampling → better tight-corridor threading
-      wz_std: 0.4
-      vx_max:  1.0             # was 0.75 — rover does 1.5 m/s; 1.0 is safe for Nav2
-      vx_min: -0.30
-      vy_max:  0.50
-      vy_min: -0.50
-      wz_max:  0.65
+      # 2026-09-24 hiz artisi + hareket onceligi: ileri/geri > donus > yan.
+      # Olculen gerekce: saf yan komut (linear.y) robotu 13.3 cm ILERI, sadece
+      # 3.0 cm yana goturdu — bu sasi yana duzgun gidemiyor, dolayisiyla MPPI'nin
+      # yan yorunge ornekleme yetkisi kisildi. Artik hedefe once donup duz
+      # gitmeyi tercih ediyor; yan hareket yalnizca ince hizalama icin kaldi.
+      #
+      # Kinematik tavan (r=0.04, lx+ly=0.32, firmware MAX_SPEED_RAD_S=18.75):
+      #   saf ileri  -> teker = vx/0.04 = 25*vx  -> vx  <= 0.75
+      #   saf donus  -> teker = wz*0.32/0.04 = 8*wz -> wz <= 2.34
+      #   birlesik   -> 25*vx + 8*wz + 25*vy <= 18.75
+      # Secilen degerlerde en kotu hal 12.5+6.4+1.25 = 20.15, yani yalnizca
+      # ucu birden tam gazda hafif saturasyon. Saturasyon bir bileseni kirpip
+      # hareketi bozdugu icin bilincli olarak sinirin yakininda kalindi.
+      vx_std: 0.22             # 0.15 -> daha yuksek hiz icin daha genis ileri ornekleme
+      vy_std: 0.03             # 0.10 -> yan ornekleme neredeyse kapali (en dusuk oncelik)
+      wz_std: 0.4              # 0.3  -> donus daha cok denenir (ikinci oncelik)
+      vx_max: 0.50             # 0.30 -> %67 hizli
+      vx_min: -0.25            # 0.15 -> geri kacis da hizlansin
+      vy_max: 0.05             # 0.15 -> yan hareket son care
+      wz_max: 0.80             # 0.60 -> donerek yonelme hizlansin
       iteration_count: 1
       prune_distance: 1.7
-      # 2daf0ff'te 4.0'di; DWB gerekcesiyle 1.0'a cekmek hataliydi. MPPI'de
-      # bu deger PathHandler'in global plani costmap cercevesine tasirken
-      # kullandigi TF toleransi — trajectory bayatligi degil. Pi 5'te yuk
-      # doygunken (olcum: load 5.0 / 4 cekirdek) ve map->odom seyrek
-      # guncellenirken 1.0 s asiliyor, PathHandler firlatiyor ve
-      # 'Optimizer fail to compute path' olarak gorunuyor. Olcum: 5 dk'da
-      # 44 hata / 80 abort. Yazarin test ettigi degere geri alindi.
-      transform_tolerance: 4.0
-      temperature: 0.5         # was 0.3 — more exploration diversity, less warm-start bias on new goals
+      transform_tolerance: 1.0
+      temperature: 0.3
       gamma: 0.015
       motion_model: "Omni"     # holonomic: samples vx + vy + wz trajectories
       visualize: false
-      reset_period: 0.3        # was 1.0 — clears stale warm-start trajectory within 2 control cycles
+      reset_period: 1.0        # retain warm start across ordinary control jitter
       critics: ["ConstraintCritic", "CostCritic", "GoalCritic",
                 "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic",
                 "PathAngleCritic", "PreferForwardCritic"]
@@ -210,7 +180,7 @@ controller_server:
         enabled: true
         cost_power: 1
         cost_weight: 5.0
-        threshold_to_consider: 1.4
+        threshold_to_consider: 0.5
       GoalAngleCritic:
         enabled: true
         cost_power: 1
@@ -219,31 +189,35 @@ controller_server:
       PreferForwardCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 2.0        # reduced: allow backward escape without large penalty
+        # 2.0 -> 5.0: kullanici onceligi "duz gidebilecekken garip hareket
+        # yapmasin". Daha yuksek agirlik geri/capraz cozumleri cezalandirir,
+        # ileri gitmeyi tercih ettirir. Geri kacis hala mumkun (vx_min -0.25)
+        # ama artik ilk secenek degil.
+        cost_weight: 5.0
         threshold_to_consider: 0.5
       CostCritic:
         enabled: true
         cost_power: 1
         cost_weight: 3.81
-        critical_cost: 252.0    # only penalize inscribed/lethal zone; allows paths through inflation (tight corridors)
+        critical_cost: 300.0
         consider_footprint: true
-        collision_cost: 100000.0  # lower: not 1M — avoids "all trajectories rejected" in tight corners
-        near_goal_distance: 1.0
+        collision_cost: 1000000.0
+        near_goal_distance: 0.3
       PathAlignCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 8.0        # was 14.0 — reduced so alignment doesn't dominate progress
+        cost_weight: 14.0       # follow the path through turns
         max_path_occupancy_ratio: 0.10
         trajectory_point_step: 3
         threshold_to_consider: 0.5
-        offset_from_furthest: 20
+        offset_from_furthest: 4
         use_path_orientations: false
       PathFollowCritic:
         enabled: true
         cost_power: 1
-        cost_weight: 14.0       # was 5.0 — now the dominant critic; drives fast progress
-        offset_from_furthest: 8  # was 5 — targets further ahead → more momentum
-        threshold_to_consider: 1.4
+        cost_weight: 5.0
+        offset_from_furthest: 4
+        threshold_to_consider: 0.5
       PathAngleCritic:
         enabled: true
         cost_power: 1
@@ -276,18 +250,15 @@ local_costmap:
       width: 6
       height: 6
       resolution: 0.05
-      # Square footprint matching rover body (0.38 m × 0.26 m) + 1 cm padding
-      footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
+      # Wheel envelope from configured geometry: x=0.19+0.04, y=0.13+0.03.
+      # The separate padding adds 1 cm; do not count wheel clearance twice.
+      footprint: "[[0.23, 0.16], [0.23, -0.16], [-0.23, -0.16], [-0.23, 0.16]]"
       footprint_padding: 0.01
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # global_costmap'teki aynı gerekçe: inflation_radius circumscribed
-        # yarıçaptan (0.258 m) büyük olmalı. Local'de 0.30 yeterli — DWB'nin
-        # ObstacleFootprint kritiği gerçek footprint ile çarpışmayı zaten
-        # kesin olarak kontrol ediyor, burada amaç sadece tutarlı maliyet.
         cost_scaling_factor: 3.0
-        inflation_radius: 0.30
+        inflation_radius: 0.35
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -346,7 +317,7 @@ global_costmap:
       # sonrasında boyutu static_layer belirler.
       width: 20
       height: 20
-      footprint: "[[0.21, 0.15], [0.21, -0.15], [-0.21, -0.15], [-0.21, 0.15]]"
+      footprint: "[[0.23, 0.16], [0.23, -0.16], [-0.23, -0.16], [-0.23, 0.16]]"
       footprint_padding: 0.01
       resolution: 0.05
       track_unknown_space: true
@@ -381,20 +352,7 @@ global_costmap:
           inf_is_valid: false
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        # 0.22 -> 0.35, cost_scaling_factor 2.0 -> 3.0.
-        #
-        # Footprint 0.42 x 0.30 m: inscribed yarıçap 0.15, circumscribed 0.258.
-        # inflation_radius (0.22) circumscribed'ın (0.258) ALTINDAYDI — bu
-        # geçersiz bir yapılandırma: costmap'in daire yaklaşımı ile DWB'nin
-        # gerçek footprint çarpışma testi birbiriyle çelişiyor, planner köşeleri
-        # kesen yollar üretiyor ve controller sonra bunları reddediyordu.
-        #
-        # NOT: inflation_radius geçişleri DARALTMAZ. Sadece inscribed yarıçap
-        # (0.15 m) içindeki hücreler 254/LETHAL olur; onun dışındaki şişirme
-        # navfn için "pahalı ama geçilebilir"dir (navfn yalnızca 254'ü engel
-        # sayar). 0.35, dar kapıları kapatmadan yolu koridor ortasına çeker.
-        # Daha önce 0.35 -> 0.22 indirilmesinin gerekçesi ("min geçiş genişliği
-        # 0.96m") bu yüzden geçerli değildi.
+        # A continuous cost gradient favours corridor centres before contact.
         cost_scaling_factor: 3.0
         inflation_radius: 0.35
       always_send_full_costmap: true
@@ -485,19 +443,20 @@ velocity_smoother:
   ros__parameters:
     use_sim_time: false
     smoothing_frequency: 10.0
-    scale_velocities: false
+    scale_velocities: true
     feedback: "OPEN_LOOP"
-    # Açısal limit DWB max_vel_theta'nın (0.65) üzerinde olmalı — 0.55 dönüş
-    # komutlarını kırpıyordu. Açısal ivme 0.50 → 0.80: kaçış dönüşü hedef
-    # hıza recovery fazı bitmeden ulaşsın.
-    max_velocity: [1.0, 0.55, 0.70]  # match vx_max
-    min_velocity: [-0.75, -0.50, -0.70]
-    max_accel: [1.2, 1.0, 0.80]
-    max_decel: [-1.5, -1.2, -0.80]
-    odom_topic: "odom"
+    # Preserve the direction of the requested vector when an axis is limited.
+    # MPPI limitleriyle birebir hizali olmali: smoother daha dar olursa
+    # MPPI'nin urettigi komut kirpilir ve robot planladigindan farkli hareket
+    # eder (bu da "garip hareket" olarak gorunur).
+    max_velocity: [0.50, 0.05, 0.80]   # vx, vy, wz — MPPI vx_max/vy_max/wz_max ile ayni
+    min_velocity: [-0.25, -0.05, -0.80]
+    max_accel: [0.8, 0.4, 1.4]         # daha hizli kalkis; donus ivmesi en yuksek
+    max_decel: [-1.0, -0.6, -1.6]      # frenleme ivmeden buyuk: engelde hizli dursun
+    odom_topic: "/odometry/filtered"
     odom_duration: 0.1
     deadband_velocity: [0.0, 0.0, 0.0]
-    velocity_timeout: 1.0
+    velocity_timeout: 0.3
 
 # Lifecycle manager — increase bond_timeout for slower hardware (Raspberry Pi).
 # Default 4.0 s is too tight; behavior_server takes ~6 s to bond on first start.

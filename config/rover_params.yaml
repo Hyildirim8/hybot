@@ -21,7 +21,13 @@
 
     # ── Speed limits ──────────────────────────────────────────────────────────
     max_linear_speed: 0.9          # m/s — haritalamada odom/SLAM yükünü düşük tut
-    max_angular_speed: 1.8         # rad/s — saat yönü dahil manuel dönüşü hızlandır
+    # 0.6 -> 1.8: manuel dönüş (saat yönü dahil) çok yavaştı.
+    # Kinematik tavan: saf dönüşte teker = wz*(lx+ly)/r = wz*0.32/0.04 = 8*wz,
+    # firmware limiti 18.75 rad/s -> wz 2.34'e kadar mümkün. 1.8 seçildi:
+    # 14.4 rad/s, yani %77 doluluk — ileri+dönüş birleşiminde bir miktar pay
+    # kalıyor. SLAM tarama örtüşmesi manuel sürüşte operatörün sorumluluğunda;
+    # haritalarken hızlı dönerseniz köşeler bulanıklaşabilir.
+    max_angular_speed: 1.8         # rad/s
 
     # ── Joystick (Logitech Cordless RumblePad 2) ──────────────────────────
     # Logitech F710 Gamepad — D-mode (switch on back set to D), linux joy driver
@@ -64,9 +70,11 @@
     axis_dpad_y: 5                 # D-pad yukarı/aşağı — ön aks pivotu (yukarıdaki tabloya bak)
     btn_pivot_left: 6              # LT — sadece sağ taraf tekerleri ileri (geniş dönüş, 2026-08-01 ters çevrildi)
     btn_pivot_right: 7             # RT — sadece sol taraf tekerleri ileri (geniş dönüş, 2026-08-01 ters çevrildi)
-    pivot_wheel_speed_rad_s: 10.0  # aktif teker çifti hedef hızı; firmware MAX_SPEED_RAD_S=18.75'i satüre etmesin diye düşük tutuldu
+    # 10.0 -> 14.0: LT/RT ve D-pad pivot dönüşleri de hızlansın (%75 doluluk;
+    # firmware MAX_SPEED_RAD_S=18.75 satüre olmuyor).
+    pivot_wheel_speed_rad_s: 14.0  # aktif teker çifti hedef hızı
     strafe_invert: false           # manuel strafe: hem manuel hem rvizde ters bildirildi, false'a geri alındı (2026-08-01)
-    auto_strafe_invert: true       # slam_manager ROS konv. (+y=sol) üretir; donanım +y=sağ → teleop burada çevirir
+    auto_strafe_invert: false      # Nav2, mecanum IK ve odometri aynı +y=sol gövde çerçevesini kullanır
     # Index 9 IS Start on this pad. Do not "fix" it to 11 again: that was tried
     # on 2026-08-11 because `jstest` prints the button list as
     # A,B,C,X,Y,Z,TL,TR,TL2,TR2,Select,Start — but those are just the evdev
@@ -86,14 +94,19 @@
     reject_extreme_axis_startup: false  # joystick başlangıçta ±1 gönderince bekleme — kapat
     autorepeat_rate: 30.0          # Hz — smoother teleop command stream
     enable_scan_safety: true       # block forward drive if /scan sees a close frontal obstacle
-    enable_scan_safety_in_auto: false # AUTO'da Nav2 costmap zaten engelleri yönetiyor; bu katman Nav2'yi geçersiz kılıyor
-    auto_emergency_stop_distance: 0.15 # sadece fiziksel temas riski; 0.22 dar kapı kenarlarında geçişi kesiyordu
+    # AUTO: tüm yönlerde süpürülen gövde kontrolü; engelde yalnızca durur.
+    nav_watchdog_timeout: 0.5
+    scan_timeout: 0.5
+    auto_half_length: 0.23         # tekerlekler dahil, Nav2 footprint ile aynı
+    auto_half_width: 0.16
+    auto_obstacle_margin: 0.01
+    # 0.6 -> 1.0: ufuk hızla ölçeklenmeli. Eski değer 0.30 m/s için seçilmişti;
+    # MPPI vx_max artık 0.50 m/s, frenleme mesafesi ve komut gecikmesi büyüdü.
+    auto_collision_horizon: 1.0    # 0.50 m/s hızda frenleme + veri/komut gecikmesi
     scan_topic: "/scan"
     front_obstacle_stop_distance: 0.30 # 0.45 geçilebilir aralıkları da kapatıyordu — dar geçiş için düşürüldü
     front_obstacle_clear_distance: 0.50
     front_obstacle_angle_deg: 36.0
-    avoidance_turn_speed: 0.45
-    avoidance_strafe_speed: 0.25
 
     # ── slam_manager (SLAM + otonom keşif) ───────────────────────────────────
     # Buttons (12 total):
@@ -115,11 +128,11 @@
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.
-    direct_explore_speed: 0.45
+    direct_explore_speed: 0.55     # 0.45 -> otonom keşif hızlansın
     # 0.30 dönüş köşelerden kurtulmaya yetmiyordu (recovery döngüsünde ~55°).
-    # SLAM artık dönüş sırasında da tarama aldığı için (max_slam_angular_z=0.50)
+    # SLAM dönüş sırasında da tarama almaya devam eder;
     # 0.45 rad/s harita kalitesini bozmadan kullanılabilir.
-    direct_explore_turn_speed: 0.45
+    direct_explore_turn_speed: 0.70 # 0.45 -> dönerek yönelme hızlansın (öncelik: dönüş > yan)
     direct_explore_backup_speed: 0.20
     direct_explore_strafe_speed: 0.30
     direct_explore_kp: 0.90              # PID P: dar geçişte boşluk merkezine hızlı ve kararlı yönelme
