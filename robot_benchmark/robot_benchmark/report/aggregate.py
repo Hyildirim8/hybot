@@ -28,6 +28,8 @@ NUMERIC_METRICS = (
     "camera_gap_total_s", "camera_frames", "runtime_duration_min",
     "battery_drop", "battery_drop_per_hour",
     "mode_switch_success_rate", "linear_distance_m", "angular_change_deg",
+    "mode_switch_latency_mean_s", "mode_switch_latency_median_s",
+    "mode_switch_latency_max_s",
 )
 
 UNITS = {
@@ -38,6 +40,8 @@ UNITS = {
     "camera_fps_mean": "FPS", "camera_interval_mean_s": "s",
     "camera_gap_total_s": "s", "runtime_duration_min": "dk",
     "battery_drop_per_hour": "birim/saat", "linear_distance_m": "m",
+    "mode_switch_latency_mean_s": "s", "mode_switch_latency_median_s": "s",
+    "mode_switch_latency_max_s": "s",
     "angular_change_deg": "°",
 }
 
@@ -68,6 +72,9 @@ LABELS_TR = {
     "battery_drop": "Batarya düşüşü",
     "battery_drop_per_hour": "Saatlik batarya tüketimi",
     "mode_switch_success_rate": "Mod geçiş başarı oranı",
+    "mode_switch_latency_mean_s": "Mod geçiş gecikmesi (ort)",
+    "mode_switch_latency_median_s": "Mod geçiş gecikmesi (medyan)",
+    "mode_switch_latency_max_s": "Mod geçiş gecikmesi (maks)",
     "linear_distance_m": "Doğrusal mesafe",
     "angular_change_deg": "Açısal değişim",
 }

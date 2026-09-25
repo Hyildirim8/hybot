@@ -7,23 +7,27 @@ mapping,lab-gercek,harita-baslangic,Harita kapsama oranı,oran,1,0.372158,0.3721
 mapping,lab-gercek,harita-baslangic,Bilinen harita alanı,m²,1,527.450016,527.450016,,527.450016,527.450016,,
 mapping,lab-gercek,harita-baslangic,Dolu hücre sayısı,,1,20170.0,20170.0,,20170.0,20170.0,,
 mapping,lab-gercek,harita-baslangic,Haritalama süresi,s,1,40.784299,40.784299,,40.784299,40.784299,,
-obstacle,lab-gercek,engel-1,Hedefe ulaşma süresi,s,2,13.285572,13.285572,10.016279,6.202993,20.368151,-76.705677,103.276821
-obstacle,lab-gercek,engel-1,Planlanan yol uzunluğu,m,2,5.2968,5.2968,0.638955,4.844991,5.748609,-0.443889,11.037489
-obstacle,lab-gercek,engel-1,Gerçek gidilen mesafe,m,2,1.269259,1.269259,1.795004,0.0,2.538518,-14.857948,17.396466
-obstacle,lab-gercek,engel-1,Ortalama hız,m/s,2,0.062316,0.062316,0.088128,0.0,0.124632,-0.72947,0.854101
-obstacle,lab-gercek,engel-1,Doğrusal konum hatası,m,2,3.530499,3.530499,1.626646,2.380287,4.680712,-11.084095,18.145094
-obstacle,lab-gercek,engel-1,Açısal konum hatası,°,2,119.80987,119.80987,0.612764,119.37658,120.243159,114.304491,125.315248
-obstacle,lab-gercek,engel-1,Yeniden planlama sayısı,,2,5.0,5.0,7.071068,0.0,10.0,-58.53,68.53
-obstacle,lab-gercek,engel-1,Alınan plan mesajı,,2,9.5,9.5,7.778175,4.0,15.0,-60.383,79.383
+mode-switch,lab-gercek,mod-10tekrar,Mod geçiş başarı oranı,,1,1.0,1.0,,1.0,1.0,,
+mode-switch,lab-gercek,mod-10tekrar,Mod geçiş gecikmesi (ort),s,1,0.015441,0.015441,,0.015441,0.015441,,
+mode-switch,lab-gercek,mod-10tekrar,Mod geçiş gecikmesi (medyan),s,1,0.01225,0.01225,,0.01225,0.01225,,
+mode-switch,lab-gercek,mod-10tekrar,Mod geçiş gecikmesi (maks),s,1,0.041842,0.041842,,0.041842,0.041842,,
+obstacle,lab-gercek,engel-1,Hedefe ulaşma süresi,s,1,20.368151,20.368151,,20.368151,20.368151,,
+obstacle,lab-gercek,engel-1,Planlanan yol uzunluğu,m,1,4.844991,4.844991,,4.844991,4.844991,,
+obstacle,lab-gercek,engel-1,Gerçek gidilen mesafe,m,1,2.538518,2.538518,,2.538518,2.538518,,
+obstacle,lab-gercek,engel-1,Ortalama hız,m/s,1,0.124632,0.124632,,0.124632,0.124632,,
+obstacle,lab-gercek,engel-1,Doğrusal konum hatası,m,1,2.380287,2.380287,,2.380287,2.380287,,
+obstacle,lab-gercek,engel-1,Açısal konum hatası,°,1,120.243159,120.243159,,120.243159,120.243159,,
+obstacle,lab-gercek,engel-1,Yeniden planlama sayısı,,1,10.0,10.0,,10.0,10.0,,
+obstacle,lab-gercek,engel-1,Alınan plan mesajı,,1,15.0,15.0,,15.0,15.0,,
 obstacle,lab-gercek,engel-1,İlk yeniden planlama süresi,s,1,6.395196,6.395196,,6.395196,6.395196,,
-obstacle,lab-gercek,engel-1,Engel algılama olayı,,2,10.5,10.5,14.849242,0.0,21.0,-122.913,143.913
-obstacle,lab-gercek,engel-1,Nav2 recovery sayısı,,2,2.0,2.0,2.828427,0.0,4.0,-23.412,27.412
-obstacle,lab-gercek,engel-1,BT plan hesaplama,,2,17.0,17.0,15.556349,6.0,28.0,-122.766,156.766
-obstacle,lab-gercek,engel-1,BT costmap temizleme,,2,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-obstacle,lab-gercek,engel-1,BT geri çekilme,,2,0.5,0.5,0.707107,0.0,1.0,-5.853,6.853
-obstacle,lab-gercek,engel-1,Harita kapsama oranı,oran,2,0.375386,0.375386,2e-06,0.375384,0.375388,0.375364,0.375408
-obstacle,lab-gercek,engel-1,Bilinen harita alanı,m²,2,534.947516,534.947516,0.003536,534.945016,534.950016,534.915751,534.979281
-obstacle,lab-gercek,engel-1,Dolu hücre sayısı,,2,22257.0,22257.0,0.0,22257.0,22257.0,22257.0,22257.0
+obstacle,lab-gercek,engel-1,Engel algılama olayı,,1,21.0,21.0,,21.0,21.0,,
+obstacle,lab-gercek,engel-1,Nav2 recovery sayısı,,1,4.0,4.0,,4.0,4.0,,
+obstacle,lab-gercek,engel-1,BT plan hesaplama,,1,28.0,28.0,,28.0,28.0,,
+obstacle,lab-gercek,engel-1,BT costmap temizleme,,1,0.0,0.0,,0.0,0.0,,
+obstacle,lab-gercek,engel-1,BT geri çekilme,,1,1.0,1.0,,1.0,1.0,,
+obstacle,lab-gercek,engel-1,Harita kapsama oranı,oran,1,0.375388,0.375388,,0.375388,0.375388,,
+obstacle,lab-gercek,engel-1,Bilinen harita alanı,m²,1,534.950016,534.950016,,534.950016,534.950016,,
+obstacle,lab-gercek,engel-1,Dolu hücre sayısı,,1,22257.0,22257.0,,22257.0,22257.0,,
 repeatability,lab-gercek,rota-A-B,Doğrusal konum hatası (yalnizca basarili),m,7,0.17311,0.178242,0.03195,0.136045,0.222138,0.14356,0.20266
 repeatability,lab-gercek,rota-A-B,Açısal konum hatası (yalnizca basarili),°,7,14.636055,18.141822,9.407292,1.269642,25.59115,5.935448,23.336663
 repeatability,lab-gercek,rota-A-B,Hedefe ulaşma süresi,s,10,62.423606,61.101999,35.565757,19.600328,130.502729,36.983163,87.864048
@@ -51,23 +55,27 @@ mapping,(tümü),(tümü),Harita kapsama oranı,oran,1,0.372158,0.372158,,0.3721
 mapping,(tümü),(tümü),Bilinen harita alanı,m²,1,527.450016,527.450016,,527.450016,527.450016,,
 mapping,(tümü),(tümü),Dolu hücre sayısı,,1,20170.0,20170.0,,20170.0,20170.0,,
 mapping,(tümü),(tümü),Haritalama süresi,s,1,40.784299,40.784299,,40.784299,40.784299,,
-obstacle,(tümü),(tümü),Hedefe ulaşma süresi,s,2,13.285572,13.285572,10.016279,6.202993,20.368151,-76.705677,103.276821
-obstacle,(tümü),(tümü),Planlanan yol uzunluğu,m,2,5.2968,5.2968,0.638955,4.844991,5.748609,-0.443889,11.037489
-obstacle,(tümü),(tümü),Gerçek gidilen mesafe,m,2,1.269259,1.269259,1.795004,0.0,2.538518,-14.857948,17.396466
-obstacle,(tümü),(tümü),Ortalama hız,m/s,2,0.062316,0.062316,0.088128,0.0,0.124632,-0.72947,0.854101
-obstacle,(tümü),(tümü),Doğrusal konum hatası,m,2,3.530499,3.530499,1.626646,2.380287,4.680712,-11.084095,18.145094
-obstacle,(tümü),(tümü),Açısal konum hatası,°,2,119.80987,119.80987,0.612764,119.37658,120.243159,114.304491,125.315248
-obstacle,(tümü),(tümü),Yeniden planlama sayısı,,2,5.0,5.0,7.071068,0.0,10.0,-58.53,68.53
-obstacle,(tümü),(tümü),Alınan plan mesajı,,2,9.5,9.5,7.778175,4.0,15.0,-60.383,79.383
+mode-switch,(tümü),(tümü),Mod geçiş başarı oranı,,1,1.0,1.0,,1.0,1.0,,
+mode-switch,(tümü),(tümü),Mod geçiş gecikmesi (ort),s,1,0.015441,0.015441,,0.015441,0.015441,,
+mode-switch,(tümü),(tümü),Mod geçiş gecikmesi (medyan),s,1,0.01225,0.01225,,0.01225,0.01225,,
+mode-switch,(tümü),(tümü),Mod geçiş gecikmesi (maks),s,1,0.041842,0.041842,,0.041842,0.041842,,
+obstacle,(tümü),(tümü),Hedefe ulaşma süresi,s,1,20.368151,20.368151,,20.368151,20.368151,,
+obstacle,(tümü),(tümü),Planlanan yol uzunluğu,m,1,4.844991,4.844991,,4.844991,4.844991,,
+obstacle,(tümü),(tümü),Gerçek gidilen mesafe,m,1,2.538518,2.538518,,2.538518,2.538518,,
+obstacle,(tümü),(tümü),Ortalama hız,m/s,1,0.124632,0.124632,,0.124632,0.124632,,
+obstacle,(tümü),(tümü),Doğrusal konum hatası,m,1,2.380287,2.380287,,2.380287,2.380287,,
+obstacle,(tümü),(tümü),Açısal konum hatası,°,1,120.243159,120.243159,,120.243159,120.243159,,
+obstacle,(tümü),(tümü),Yeniden planlama sayısı,,1,10.0,10.0,,10.0,10.0,,
+obstacle,(tümü),(tümü),Alınan plan mesajı,,1,15.0,15.0,,15.0,15.0,,
 obstacle,(tümü),(tümü),İlk yeniden planlama süresi,s,1,6.395196,6.395196,,6.395196,6.395196,,
-obstacle,(tümü),(tümü),Engel algılama olayı,,2,10.5,10.5,14.849242,0.0,21.0,-122.913,143.913
-obstacle,(tümü),(tümü),Nav2 recovery sayısı,,2,2.0,2.0,2.828427,0.0,4.0,-23.412,27.412
-obstacle,(tümü),(tümü),BT plan hesaplama,,2,17.0,17.0,15.556349,6.0,28.0,-122.766,156.766
-obstacle,(tümü),(tümü),BT costmap temizleme,,2,0.0,0.0,0.0,0.0,0.0,0.0,0.0
-obstacle,(tümü),(tümü),BT geri çekilme,,2,0.5,0.5,0.707107,0.0,1.0,-5.853,6.853
-obstacle,(tümü),(tümü),Harita kapsama oranı,oran,2,0.375386,0.375386,2e-06,0.375384,0.375388,0.375364,0.375408
-obstacle,(tümü),(tümü),Bilinen harita alanı,m²,2,534.947516,534.947516,0.003536,534.945016,534.950016,534.915751,534.979281
-obstacle,(tümü),(tümü),Dolu hücre sayısı,,2,22257.0,22257.0,0.0,22257.0,22257.0,22257.0,22257.0
+obstacle,(tümü),(tümü),Engel algılama olayı,,1,21.0,21.0,,21.0,21.0,,
+obstacle,(tümü),(tümü),Nav2 recovery sayısı,,1,4.0,4.0,,4.0,4.0,,
+obstacle,(tümü),(tümü),BT plan hesaplama,,1,28.0,28.0,,28.0,28.0,,
+obstacle,(tümü),(tümü),BT costmap temizleme,,1,0.0,0.0,,0.0,0.0,,
+obstacle,(tümü),(tümü),BT geri çekilme,,1,1.0,1.0,,1.0,1.0,,
+obstacle,(tümü),(tümü),Harita kapsama oranı,oran,1,0.375388,0.375388,,0.375388,0.375388,,
+obstacle,(tümü),(tümü),Bilinen harita alanı,m²,1,534.950016,534.950016,,534.950016,534.950016,,
+obstacle,(tümü),(tümü),Dolu hücre sayısı,,1,22257.0,22257.0,,22257.0,22257.0,,
 repeatability,(tümü),(tümü),Hedefe ulaşma süresi,s,10,62.423606,61.101999,35.565757,19.600328,130.502729,36.983163,87.864048
 repeatability,(tümü),(tümü),Planlanan yol uzunluğu,m,10,9.578223,7.895342,4.975525,4.574905,18.799141,6.019194,13.137252
 repeatability,(tümü),(tümü),Gerçek gidilen mesafe,m,10,10.805437,9.253177,5.906283,4.598179,23.700517,6.580631,15.030244

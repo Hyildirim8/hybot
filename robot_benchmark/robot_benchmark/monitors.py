@@ -25,7 +25,7 @@ from rclpy.qos import (
 
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import OccupancyGrid, Odometry, Path
-from sensor_msgs.msg import CompressedImage, LaserScan
+from sensor_msgs.msg import CompressedImage, Joy, LaserScan
 from std_msgs.msg import Bool, Float32MultiArray, String
 
 from . import ros_names as N
@@ -85,6 +85,7 @@ class BenchmarkMonitor(Node):
 
     ALL = frozenset({
         "pose", "wheels", "mode", "plan", "scan", "map", "camera", "bt", "cmd",
+        "joy",
     })
 
     def __init__(self, want: set[str] | None = None, node_name: str = "robot_benchmark"):
@@ -179,6 +180,17 @@ class BenchmarkMonitor(Node):
         if "cmd" in want:
             self.create_subscription(Twist, N.TOPIC_CMD_VEL_NAV_SMOOTHED,
                                      self._cmd_cb, SENSOR_QOS)
+
+        # ── joystick (mod gecis referansi) ────────────────────────────────
+        # Mod gecisinin "istek" anini operatorun Enter'i yerine BUTONUN
+        # kendisinden almak, olcumden insan reaksiyon suresini cikarir ve
+        # gercek sistem gecikmesini verir. btn_auto_mode=9 (Start).
+        self.joy_buttons: list[int] = []
+        self.auto_button_index = 9
+        self.auto_button_presses: list[float] = []   # yukselen kenar zamanlari
+        self._prev_auto_button = 0
+        if "joy" in want:
+            self.create_subscription(Joy, "/joy", self._joy_cb, SENSOR_QOS)
 
         self.on_sample: Callable[[str, dict], None] | None = None
 
@@ -370,6 +382,14 @@ class BenchmarkMonitor(Node):
 
     def _cmd_cb(self, msg: Twist) -> None:
         self.last_cmd = msg
+
+    def _joy_cb(self, msg: Joy) -> None:
+        self.joy_buttons = list(msg.buttons)
+        idx = self.auto_button_index
+        cur = int(msg.buttons[idx]) if idx < len(msg.buttons) else 0
+        if cur and not self._prev_auto_button:      # yukselen kenar
+            self.auto_button_presses.append(self.now_s())
+        self._prev_auto_button = cur
 
 
 def _jpeg_resolution(data: bytes) -> str | None:

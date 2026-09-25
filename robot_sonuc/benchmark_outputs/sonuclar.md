@@ -41,31 +41,44 @@
 _Bu deney için sayısal metrik ölçülemedi._
 
 
-## Deney: obstacle
+## Deney: mode-switch
 
-- Koşu sayısı: **2**
-- Hedefe ulaşma oranı: **%0.0**
-- Durum dağılımı: İptal (abort): 2
+- Koşu sayısı: **1**
+- Hedefe ulaşma oranı: **N/A**
 
 | Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
 |---|---|---|---|---|---|---|---|---|
-| Hedefe ulaşma süresi | s | 2 | 13.286 | 13.286 | 10.016 | 6.203 | 20.368 | [-76.706; 103.277] |
-| Planlanan yol uzunluğu | m | 2 | 5.297 | 5.297 | 0.639 | 4.845 | 5.749 | [-0.444; 11.037] |
-| Gerçek gidilen mesafe | m | 2 | 1.269 | 1.269 | 1.795 | 0.000 | 2.539 | [-14.858; 17.396] |
-| Ortalama hız | m/s | 2 | 0.062 | 0.062 | 0.088 | 0.000 | 0.125 | [-0.729; 0.854] |
-| Doğrusal konum hatası | m | 2 | 3.530 | 3.530 | 1.627 | 2.380 | 4.681 | [-11.084; 18.145] |
-| Açısal konum hatası | ° | 2 | 119.810 | 119.810 | 0.613 | 119.377 | 120.243 | [114.304; 125.315] |
-| Yeniden planlama sayısı | - | 2 | 5.000 | 5.000 | 7.071 | 0.000 | 10.000 | [-58.530; 68.530] |
-| Alınan plan mesajı | - | 2 | 9.500 | 9.500 | 7.778 | 4.000 | 15.000 | [-60.383; 79.383] |
+| Mod geçiş başarı oranı | - | 1 | 1.000 | 1.000 | N/A | 1.000 | 1.000 | N/A |
+| Mod geçiş gecikmesi (ort) | s | 1 | 0.015 | 0.015 | N/A | 0.015 | 0.015 | N/A |
+| Mod geçiş gecikmesi (medyan) | s | 1 | 0.012 | 0.012 | N/A | 0.012 | 0.012 | N/A |
+| Mod geçiş gecikmesi (maks) | s | 1 | 0.042 | 0.042 | N/A | 0.042 | 0.042 | N/A |
+
+
+## Deney: obstacle
+
+- Koşu sayısı: **1**
+- Hedefe ulaşma oranı: **%0.0**
+- Durum dağılımı: İptal (abort): 1
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Hedefe ulaşma süresi | s | 1 | 20.368 | 20.368 | N/A | 20.368 | 20.368 | N/A |
+| Planlanan yol uzunluğu | m | 1 | 4.845 | 4.845 | N/A | 4.845 | 4.845 | N/A |
+| Gerçek gidilen mesafe | m | 1 | 2.539 | 2.539 | N/A | 2.539 | 2.539 | N/A |
+| Ortalama hız | m/s | 1 | 0.125 | 0.125 | N/A | 0.125 | 0.125 | N/A |
+| Doğrusal konum hatası | m | 1 | 2.380 | 2.380 | N/A | 2.380 | 2.380 | N/A |
+| Açısal konum hatası | ° | 1 | 120.243 | 120.243 | N/A | 120.243 | 120.243 | N/A |
+| Yeniden planlama sayısı | - | 1 | 10.000 | 10.000 | N/A | 10.000 | 10.000 | N/A |
+| Alınan plan mesajı | - | 1 | 15.000 | 15.000 | N/A | 15.000 | 15.000 | N/A |
 | İlk yeniden planlama süresi | s | 1 | 6.395 | 6.395 | N/A | 6.395 | 6.395 | N/A |
-| Engel algılama olayı | - | 2 | 10.500 | 10.500 | 14.849 | 0.000 | 21.000 | [-122.913; 143.913] |
-| Nav2 recovery sayısı | - | 2 | 2.000 | 2.000 | 2.828 | 0.000 | 4.000 | [-23.412; 27.412] |
-| BT plan hesaplama | - | 2 | 17.000 | 17.000 | 15.556 | 6.000 | 28.000 | [-122.766; 156.766] |
-| BT costmap temizleme | - | 2 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | [0.000; 0.000] |
-| BT geri çekilme | - | 2 | 0.500 | 0.500 | 0.707 | 0.000 | 1.000 | [-5.853; 6.853] |
-| Harita kapsama oranı | oran | 2 | 0.375 | 0.375 | 0.000 | 0.375 | 0.375 | [0.375; 0.375] |
-| Bilinen harita alanı | m² | 2 | 534.948 | 534.948 | 0.004 | 534.945 | 534.950 | [534.916; 534.979] |
-| Dolu hücre sayısı | - | 2 | 22257.000 | 22257.000 | 0.000 | 22257.000 | 22257.000 | [22257.000; 22257.000] |
+| Engel algılama olayı | - | 1 | 21.000 | 21.000 | N/A | 21.000 | 21.000 | N/A |
+| Nav2 recovery sayısı | - | 1 | 4.000 | 4.000 | N/A | 4.000 | 4.000 | N/A |
+| BT plan hesaplama | - | 1 | 28.000 | 28.000 | N/A | 28.000 | 28.000 | N/A |
+| BT costmap temizleme | - | 1 | 0.000 | 0.000 | N/A | 0.000 | 0.000 | N/A |
+| BT geri çekilme | - | 1 | 1.000 | 1.000 | N/A | 1.000 | 1.000 | N/A |
+| Harita kapsama oranı | oran | 1 | 0.375 | 0.375 | N/A | 0.375 | 0.375 | N/A |
+| Bilinen harita alanı | m² | 1 | 534.950 | 534.950 | N/A | 534.950 | 534.950 | N/A |
+| Dolu hücre sayısı | - | 1 | 22257.000 | 22257.000 | N/A | 22257.000 | 22257.000 | N/A |
 
 
 ## Deney: repeatability
@@ -170,32 +183,47 @@ _Bu deney için sayısal metrik ölçülemedi._
 
 
 
+### mode-switch — ortam: lab-gercek — hedef: mod-10tekrar
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Mod geçiş başarı oranı | - | 1 | 1.000 | 1.000 | N/A | 1.000 | 1.000 | N/A |
+| Mod geçiş gecikmesi (ort) | s | 1 | 0.015 | 0.015 | N/A | 0.015 | 0.015 | N/A |
+| Mod geçiş gecikmesi (medyan) | s | 1 | 0.012 | 0.012 | N/A | 0.012 | 0.012 | N/A |
+| Mod geçiş gecikmesi (maks) | s | 1 | 0.042 | 0.042 | N/A | 0.042 | 0.042 | N/A |
+
+
 ### obstacle — ortam: lab-gercek — hedef: engel-1
 
-- Tekrar sayısı: **2**
+- Tekrar sayısı: **1**
 - Başarı oranı: **%0.0**
 
 **Tüm koşular (başarısızlar dahil).**
 
 | Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
 |---|---|---|---|---|---|---|---|---|
-| Hedefe ulaşma süresi | s | 2 | 13.286 | 13.286 | 10.016 | 6.203 | 20.368 | [-76.706; 103.277] |
-| Planlanan yol uzunluğu | m | 2 | 5.297 | 5.297 | 0.639 | 4.845 | 5.749 | [-0.444; 11.037] |
-| Gerçek gidilen mesafe | m | 2 | 1.269 | 1.269 | 1.795 | 0.000 | 2.539 | [-14.858; 17.396] |
-| Ortalama hız | m/s | 2 | 0.062 | 0.062 | 0.088 | 0.000 | 0.125 | [-0.729; 0.854] |
-| Doğrusal konum hatası | m | 2 | 3.530 | 3.530 | 1.627 | 2.380 | 4.681 | [-11.084; 18.145] |
-| Açısal konum hatası | ° | 2 | 119.810 | 119.810 | 0.613 | 119.377 | 120.243 | [114.304; 125.315] |
-| Yeniden planlama sayısı | - | 2 | 5.000 | 5.000 | 7.071 | 0.000 | 10.000 | [-58.530; 68.530] |
-| Alınan plan mesajı | - | 2 | 9.500 | 9.500 | 7.778 | 4.000 | 15.000 | [-60.383; 79.383] |
+| Hedefe ulaşma süresi | s | 1 | 20.368 | 20.368 | N/A | 20.368 | 20.368 | N/A |
+| Planlanan yol uzunluğu | m | 1 | 4.845 | 4.845 | N/A | 4.845 | 4.845 | N/A |
+| Gerçek gidilen mesafe | m | 1 | 2.539 | 2.539 | N/A | 2.539 | 2.539 | N/A |
+| Ortalama hız | m/s | 1 | 0.125 | 0.125 | N/A | 0.125 | 0.125 | N/A |
+| Doğrusal konum hatası | m | 1 | 2.380 | 2.380 | N/A | 2.380 | 2.380 | N/A |
+| Açısal konum hatası | ° | 1 | 120.243 | 120.243 | N/A | 120.243 | 120.243 | N/A |
+| Yeniden planlama sayısı | - | 1 | 10.000 | 10.000 | N/A | 10.000 | 10.000 | N/A |
+| Alınan plan mesajı | - | 1 | 15.000 | 15.000 | N/A | 15.000 | 15.000 | N/A |
 | İlk yeniden planlama süresi | s | 1 | 6.395 | 6.395 | N/A | 6.395 | 6.395 | N/A |
-| Engel algılama olayı | - | 2 | 10.500 | 10.500 | 14.849 | 0.000 | 21.000 | [-122.913; 143.913] |
-| Nav2 recovery sayısı | - | 2 | 2.000 | 2.000 | 2.828 | 0.000 | 4.000 | [-23.412; 27.412] |
-| BT plan hesaplama | - | 2 | 17.000 | 17.000 | 15.556 | 6.000 | 28.000 | [-122.766; 156.766] |
-| BT costmap temizleme | - | 2 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | [0.000; 0.000] |
-| BT geri çekilme | - | 2 | 0.500 | 0.500 | 0.707 | 0.000 | 1.000 | [-5.853; 6.853] |
-| Harita kapsama oranı | oran | 2 | 0.375 | 0.375 | 0.000 | 0.375 | 0.375 | [0.375; 0.375] |
-| Bilinen harita alanı | m² | 2 | 534.948 | 534.948 | 0.004 | 534.945 | 534.950 | [534.916; 534.979] |
-| Dolu hücre sayısı | - | 2 | 22257.000 | 22257.000 | 0.000 | 22257.000 | 22257.000 | [22257.000; 22257.000] |
+| Engel algılama olayı | - | 1 | 21.000 | 21.000 | N/A | 21.000 | 21.000 | N/A |
+| Nav2 recovery sayısı | - | 1 | 4.000 | 4.000 | N/A | 4.000 | 4.000 | N/A |
+| BT plan hesaplama | - | 1 | 28.000 | 28.000 | N/A | 28.000 | 28.000 | N/A |
+| BT costmap temizleme | - | 1 | 0.000 | 0.000 | N/A | 0.000 | 0.000 | N/A |
+| BT geri çekilme | - | 1 | 1.000 | 1.000 | N/A | 1.000 | 1.000 | N/A |
+| Harita kapsama oranı | oran | 1 | 0.375 | 0.375 | N/A | 0.375 | 0.375 | N/A |
+| Bilinen harita alanı | m² | 1 | 534.950 | 534.950 | N/A | 534.950 | 534.950 | N/A |
+| Dolu hücre sayısı | - | 1 | 22257.000 | 22257.000 | N/A | 22257.000 | 22257.000 | N/A |
 
 
 ### repeatability — ortam: lab-gercek — hedef: rota-A-B

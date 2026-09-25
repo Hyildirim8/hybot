@@ -226,7 +226,7 @@ class _NullCtx:
 
 def cmd_mode_switch(args) -> int:
     from .experiments.mode_switch import run_mode_switch
-    rclpy, monitor = _ros_init(args, {"mode", "wheels"})
+    rclpy, monitor = _ros_init(args, {"mode", "wheels", "joy"})
     try:
         meta = make_meta("mode-switch", args)
         with RunStore(meta) as store, BagRecorder(store.dir, args.record_bag):
