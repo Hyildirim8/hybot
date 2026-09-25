@@ -1,0 +1,2 @@
+Toplu benchmark çıktıları (CSV/JSON/PNG/MD/TeX) buraya üretilir.
+Üretmek için: cd robot_benchmark && python3 -m robot_benchmark.cli report

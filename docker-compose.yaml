@@ -402,6 +402,43 @@ services:
       - imu
       - rf2o
 
+  # ── benchmark ─────────────────────────────────────────────────────────────
+  # robot_benchmark — performans testi ve akademik rapor üretimi.
+  # İSTEĞE BAĞLI: yalnızca 'benchmark' profili ile açılır, normal sürüşte
+  # çalışmaz ve Pi'de CPU harcamaz:
+  #     COMPOSE_PROFILES=nav,benchmark docker compose up -d
+  # veya doğrudan tek seferlik:
+  #     docker compose --profile benchmark run --rm benchmark \
+  #         python3 -m robot_benchmark.cli navigation -e "koridor" -g H1 -r 3
+  #
+  # SALT GÖZLEM: bu servis hiçbir hareket komutu yayınlamaz. Tek istisna
+  # 'mecanum --allow-motion' olup açık operatör onayı ister.
+  #
+  # Kaynak ve sonuç dizinleri host'tan bağlanır; böylece image yeniden
+  # derlemeden kod değiştirilebilir ve sonuçlar depoda kalır.
+  benchmark:
+    <<: *ros-service
+    profiles:
+      - benchmark
+    restart: "no"          # tek seferlik çalışır; sürekli yeniden başlamasın
+    stdin_open: true       # operatör girdisi (çarpışma işareti, notlar)
+    tty: true
+    working_dir: /benchmark
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      FASTRTPS_DEFAULT_PROFILES_FILE: /config/fastdds_udp.xml
+      ROS_AUTOMATIC_DISCOVERY_RANGE: LOCALHOST
+      # Yol çözümünü açıkça sabitle: konteynerde depo kökü bağlı değil.
+      ROBOT_BENCHMARK_RESULTS: /benchmark/results
+      ROBOT_BENCHMARK_OUTPUTS: /robot_sonuc/benchmark_outputs
+    volumes:
+      - ./config/rover_params.yaml:/config/rover_params.yaml:ro
+      - ./config/${DDS_PROFILE:-fastdds_udp.xml}:/config/fastdds_udp.xml:ro
+      - ./robot_benchmark:/benchmark:rw
+      - ./robot_sonuc:/robot_sonuc:rw
+      - ./maps:/maps:ro
+    command: ["python3", "-m", "robot_benchmark.cli", "menu"]
+
   # ── rf2o ──────────────────────────────────────────────────────────────────
   # rf2o_laser_odometry — lidar taramalarından odometri türetir (range-flow
   # scan matching). Tekerlek encoder'larına HİÇ bakmaz, dolayısıyla makara

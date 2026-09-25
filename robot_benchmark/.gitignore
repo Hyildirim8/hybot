@@ -1,0 +1,5 @@
+# Koşu verileri ve üretilen çıktılar depoya girmez; her testte yeniden üretilir.
+# Akademik rapora giren dosyaları paylaşmak isterseniz elle ekleyin (git add -f).
+results/
+__pycache__/
+*.pyc

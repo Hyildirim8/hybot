@@ -1,0 +1,14 @@
+# robot_benchmark bağımlılıkları
+#
+# ÖLÇÜM tarafı (ROS içinde çalışır) ek pip paketi İSTEMEZ:
+#   rclpy, geometry_msgs, nav_msgs, sensor_msgs, std_msgs, action_msgs,
+#   nav2_msgs, tf2_ros  -> ROS 2 Humble kurulumundan gelir.
+#
+# RAPOR tarafı:
+matplotlib>=3.5        # PNG grafikleri. YOKSA grafikler atlanır, tablolar üretilir.
+#
+# İsteğe bağlı:
+seaborn>=0.12          # yalnızca grafik stili; yoksa matplotlib stili kullanılır
+#
+# Raspberry Pi OS / Debian'da pip yerine apt önerilir (daha hafif, çakışmasız):
+#   sudo apt-get install -y python3-matplotlib

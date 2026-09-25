@@ -1,0 +1,2 @@
+Koşu verileri buraya yazılır: <experiment_id>/{meta,metrics}.json, events.jsonl,
+samples/*.csv, run.csv. .gitignore ile depo dışında tutulur.
