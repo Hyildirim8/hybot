@@ -111,7 +111,41 @@
       "run_count": 6,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 6,
+          "mean": 0.47547377512845324,
+          "median": 0.6360683711621722,
+          "std": 0.36354534736230804,
+          "minimum": 0.012755011837976882,
+          "maximum": 0.8361206473460724,
+          "ci95_low": 0.09389426828532993,
+          "ci95_high": 0.8570532819715766,
+          "ci95_halfwidth": 0.3815795068431233
+        },
+        "lateral_deviation": {
+          "n": 6,
+          "mean": 0.020706912907544794,
+          "median": 0.01794883714429773,
+          "std": 0.01089504387868267,
+          "minimum": 0.01098997487229017,
+          "maximum": 0.040655910244582115,
+          "ci95_low": 0.009271405616844284,
+          "ci95_high": 0.0321424201982453,
+          "ci95_halfwidth": 0.01143550729070051
+        },
+        "motion_window_s": {
+          "n": 6,
+          "mean": 5.768433094024658,
+          "median": 3.9513182640075684,
+          "std": 3.7754214317827106,
+          "minimum": 3.176347494125366,
+          "maximum": 12.800017595291138,
+          "ci95_low": 1.8057267672431334,
+          "ci95_high": 9.731139420806183,
+          "ci95_halfwidth": 3.962706326781525
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mode-switch": {
@@ -703,7 +737,41 @@
       "run_count": 1,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 1,
+          "mean": 0.6019389428931111,
+          "median": 0.6019389428931111,
+          "std": null,
+          "minimum": 0.6019389428931111,
+          "maximum": 0.6019389428931111,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "lateral_deviation": {
+          "n": 1,
+          "mean": 0.023942906201824127,
+          "median": 0.023942906201824127,
+          "std": null,
+          "minimum": 0.023942906201824127,
+          "maximum": 0.023942906201824127,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "motion_window_s": {
+          "n": 1,
+          "mean": 3.176347494125366,
+          "median": 3.176347494125366,
+          "std": null,
+          "minimum": 3.176347494125366,
+          "maximum": 3.176347494125366,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mecanum|lab-gercek|yon-2-geri": {
@@ -713,7 +781,41 @@
       "run_count": 1,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 1,
+          "mean": 0.6701977994312334,
+          "median": 0.6701977994312334,
+          "std": null,
+          "minimum": 0.6701977994312334,
+          "maximum": 0.6701977994312334,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "lateral_deviation": {
+          "n": 1,
+          "mean": 0.01098997487229017,
+          "median": 0.01098997487229017,
+          "std": null,
+          "minimum": 0.01098997487229017,
+          "maximum": 0.01098997487229017,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "motion_window_s": {
+          "n": 1,
+          "mean": 3.354220151901245,
+          "median": 3.354220151901245,
+          "std": null,
+          "minimum": 3.354220151901245,
+          "maximum": 3.354220151901245,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mecanum|lab-gercek|yon-3-sol": {
@@ -723,7 +825,41 @@
       "run_count": 1,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 1,
+          "mean": 0.7114105641860858,
+          "median": 0.7114105641860858,
+          "std": null,
+          "minimum": 0.7114105641860858,
+          "maximum": 0.7114105641860858,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "lateral_deviation": {
+          "n": 1,
+          "mean": 0.015477989212355568,
+          "median": 0.015477989212355568,
+          "std": null,
+          "minimum": 0.015477989212355568,
+          "maximum": 0.015477989212355568,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "motion_window_s": {
+          "n": 1,
+          "mean": 3.7439417839050293,
+          "median": 3.7439417839050293,
+          "std": null,
+          "minimum": 3.7439417839050293,
+          "maximum": 3.7439417839050293,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mecanum|lab-gercek|yon-4-sag": {
@@ -733,7 +869,41 @@
       "run_count": 1,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 1,
+          "mean": 0.8361206473460724,
+          "median": 0.8361206473460724,
+          "std": null,
+          "minimum": 0.8361206473460724,
+          "maximum": 0.8361206473460724,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "lateral_deviation": {
+          "n": 1,
+          "mean": 0.040655910244582115,
+          "median": 0.040655910244582115,
+          "std": null,
+          "minimum": 0.040655910244582115,
+          "maximum": 0.040655910244582115,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "motion_window_s": {
+          "n": 1,
+          "mean": 4.158694744110107,
+          "median": 4.158694744110107,
+          "std": null,
+          "minimum": 4.158694744110107,
+          "maximum": 4.158694744110107,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mecanum|lab-gercek|yon-5-ccw": {
@@ -743,7 +913,41 @@
       "run_count": 1,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 1,
+          "mean": 0.020419685076239893,
+          "median": 0.020419685076239893,
+          "std": null,
+          "minimum": 0.020419685076239893,
+          "maximum": 0.020419685076239893,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "lateral_deviation": {
+          "n": 1,
+          "mean": 0.020419685076239893,
+          "median": 0.020419685076239893,
+          "std": null,
+          "minimum": 0.020419685076239893,
+          "maximum": 0.020419685076239893,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "motion_window_s": {
+          "n": 1,
+          "mean": 7.3773767948150635,
+          "median": 7.3773767948150635,
+          "std": null,
+          "minimum": 7.3773767948150635,
+          "maximum": 7.3773767948150635,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mecanum|lab-gercek|yon-6-cw": {
@@ -753,7 +957,41 @@
       "run_count": 1,
       "goal_success_rate": null,
       "goal_status_counts": {},
-      "metrics": {},
+      "metrics": {
+        "linear_distance_m": {
+          "n": 1,
+          "mean": 0.012755011837976882,
+          "median": 0.012755011837976882,
+          "std": null,
+          "minimum": 0.012755011837976882,
+          "maximum": 0.012755011837976882,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "lateral_deviation": {
+          "n": 1,
+          "mean": 0.012755011837976882,
+          "median": 0.012755011837976882,
+          "std": null,
+          "minimum": 0.012755011837976882,
+          "maximum": 0.012755011837976882,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "motion_window_s": {
+          "n": 1,
+          "mean": 12.800017595291138,
+          "median": 12.800017595291138,
+          "std": null,
+          "minimum": 12.800017595291138,
+          "maximum": 12.800017595291138,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "mode-switch|lab-gercek|mod-10tekrar": {

@@ -213,6 +213,21 @@ def cmd_mecanum(args) -> int:
                 store.set_metric(f"{r['direction']}_verdict", r["direction_verdict"])
                 store.set_metric(f"{r['direction']}_primary",
                                  r["primary_component_m_or_deg"])
+            # Tek yonluk kosularda olcumleri UST SEVIYEYE de yaz: toplu rapor
+            # ic ice listeleri ozetleyemiyor, bu yuzden mecanum tablosu bos
+            # kaliyordu.
+            if len(results) == 1:
+                r0 = results[0]
+                store.set_metrics(
+                    mecanum_direction=r0["direction"],
+                    linear_distance_m=r0["linear_distance_m"],
+                    forward_component_m=r0["forward_component_m"],
+                    lateral_component_m=r0["lateral_component_m"],
+                    angular_change_deg=r0["angular_change_deg"],
+                    lateral_deviation=r0["lateral_deviation_m_or_deg"],
+                    direction_verdict=r0["direction_verdict"],
+                    motion_window_s=r0.get("motion_window_s"),
+                )
         say(f"  kaydedildi -> {results_dir() / meta.experiment_id}")
     finally:
         _ros_shutdown(rclpy, monitor)

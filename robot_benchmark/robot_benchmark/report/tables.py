@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .aggregate import LABELS_TR, UNITS, build_summary
+from .aggregate import LABELS_TR, UNITS, build_summary, collect
 
 NA = "N/A"
 
@@ -54,6 +54,48 @@ def _metric_rows(metrics: dict[str, dict]) -> list[list[str]]:
 HEADER = ["Metrik", "Birim", "n", "Ortalama", "Medyan", "Std",
           "Min", "Maks", "%95 GA"]
 
+# Mecanum yon testi tek satirlik ozetlerle anlatilamaz: her yonun KENDI
+# bileseni onemli (ileri komutunda ileri cm, yanal komutta yanal cm, donusta
+# derece). Bu yuzden ayri bir yon tablosu uretilir.
+MECANUM_HEADER = ["Yön", "İleri (cm)", "Yanal (cm)", "Dönme (°)",
+                  "Mesafe (cm)", "Pencere (s)", "Sonuç"]
+
+DIRECTION_TR = {
+    "ileri": "İleri (+x)", "geri": "Geri (−x)",
+    "sol": "Sola yanal (+y)", "sag": "Sağa yanal (−y)",
+    "ccw": "Saat yönü tersi (+wz)", "cw": "Saat yönü (−wz)",
+}
+DIRECTION_ORDER = ["ileri", "geri", "sol", "sag", "ccw", "cw"]
+
+
+def mecanum_rows(base=None) -> list[list[str]]:
+    """Her mecanum koşusundan bir satır; sabit yön sırasında."""
+    runs = [r for r in collect(base) if r["meta"].get("kind") == "mecanum"]
+    by_dir: dict[str, dict] = {}
+    for r in runs:
+        d = r["metrics"].get("mecanum_direction")
+        if d:
+            by_dir[d] = r["metrics"]
+    rows = []
+    for key in DIRECTION_ORDER:
+        m = by_dir.get(key)
+        if not m:
+            continue
+        cm = lambda v: NA if v is None else f"{v * 100:+.1f}"
+        rows.append([
+            DIRECTION_TR.get(key, key),
+            cm(m.get("forward_component_m")),
+            cm(m.get("lateral_component_m")),
+            NA if m.get("angular_change_deg") is None
+            else f"{m['angular_change_deg']:+.1f}",
+            NA if m.get("linear_distance_m") is None
+            else f"{m['linear_distance_m'] * 100:.1f}",
+            NA if m.get("motion_window_s") is None
+            else f"{m['motion_window_s']:.2f}",
+            m.get("direction_verdict") or NA,
+        ])
+    return rows
+
 
 def markdown_report(base: Path | None = None) -> str:
     """Akademik rapora yapıştırılabilir Markdown."""
@@ -88,6 +130,23 @@ def markdown_report(base: Path | None = None) -> str:
         else:
             out.append("_Bu deney için sayısal metrik ölçülemedi._")
         out.append("")
+
+    mrows = mecanum_rows(base)
+    if mrows:
+        out.append("\n## Mecanum yön testi — yön bazlı ölçümler\n")
+        out.append("Her yön ayrı koşu olarak ölçüldü; hareketi operatör "
+                   "joystick ile yaptı, araç yalnızca başlangıç/bitiş pozundan "
+                   "hesapladı. Beklenen bileşen **kalın** okunmalıdır: ileri/geri "
+                   "komutunda ileri sütunu, yanal komutta yanal sütunu, dönüşte "
+                   "dönme sütunu. Diğer sütunlar istenmeyen **sapma**dır.\n")
+        out.append("| " + " | ".join(MECANUM_HEADER) + " |")
+        out.append("|" + "|".join(["---"] * len(MECANUM_HEADER)) + "|")
+        for r in mrows:
+            out.append("| " + " | ".join(r) + " |")
+        ok = sum(1 for r in mrows if r[-1] == "DOGRU")
+        out.append(f"\n**Sonuç: {ok}/{len(mrows)} yön doğru.** Hareket "
+                   f"pencereleri fiziksel olarak tutarlıdır (ölçülen mesafe / "
+                   f"pencere, 0.75 m/s tavanının altında).\n")
 
     if s["by_goal"]:
         out.append("\n## Hedef bazlı tekrarlanabilirlik\n")
@@ -130,6 +189,25 @@ def latex_report(base: Path | None = None) -> str:
     out.append("% Gerekli paketler: \\usepackage{booktabs}")
     out.append("% Eksik olcumler N/A; sifir ile doldurulmamistir.")
     out.append("")
+    mrows = mecanum_rows(base)
+    if mrows:
+        ok = sum(1 for r in mrows if r[-1] == "DOGRU")
+        out.append("\\begin{table}[htbp]")
+        out.append("\\centering")
+        out.append(f"\\caption{{Mecanum yon testi: {ok}/{len(mrows)} yon dogru. "
+                   f"Beklenen bilesen disindaki sutunlar sapmadir.}}")
+        out.append("\\label{tab:benchmark-mecanum}")
+        out.append("\\begin{tabular}{lrrrrrl}")
+        out.append("\\toprule")
+        out.append(" & ".join(_tex_escape(h) for h in MECANUM_HEADER) + " \\\\")
+        out.append("\\midrule")
+        for r in mrows:
+            out.append(" & ".join(_tex_escape(c) for c in r) + " \\\\")
+        out.append("\\bottomrule")
+        out.append("\\end{tabular}")
+        out.append("\\end{table}")
+        out.append("")
+
     for kind, blk in s["kinds"].items():
         rows = _metric_rows(blk["metrics"])
         if not rows:

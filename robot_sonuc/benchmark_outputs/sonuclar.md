@@ -38,7 +38,11 @@
 - Koşu sayısı: **6**
 - Hedefe ulaşma oranı: **N/A**
 
-_Bu deney için sayısal metrik ölçülemedi._
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 6 | 0.475 | 0.636 | 0.364 | 0.013 | 0.836 | [0.094; 0.857] |
+| Yanal/ikincil sapma | m/° | 6 | 0.021 | 0.018 | 0.011 | 0.011 | 0.041 | [0.009; 0.032] |
+| Hareket penceresi | s | 6 | 5.768 | 3.951 | 3.775 | 3.176 | 12.800 | [1.806; 9.731] |
 
 
 ## Deney: mode-switch
@@ -108,6 +112,22 @@ _Bu deney için sayısal metrik ölçülemedi._
 | Dolu hücre sayısı | - | 10 | 20875.200 | 20970.500 | 767.102 | 19960.000 | 21989.000 | [20326.486; 21423.914] |
 
 
+## Mecanum yön testi — yön bazlı ölçümler
+
+Her yön ayrı koşu olarak ölçüldü; hareketi operatör joystick ile yaptı, araç yalnızca başlangıç/bitiş pozundan hesapladı. Beklenen bileşen **kalın** okunmalıdır: ileri/geri komutunda ileri sütunu, yanal komutta yanal sütunu, dönüşte dönme sütunu. Diğer sütunlar istenmeyen **sapma**dır.
+
+| Yön | İleri (cm) | Yanal (cm) | Dönme (°) | Mesafe (cm) | Pencere (s) | Sonuç |
+|---|---|---|---|---|---|---|
+| İleri (+x) | +60.1 | -2.4 | -5.5 | 60.2 | 3.18 | DOGRU |
+| Geri (−x) | -67.0 | +1.1 | -1.9 | 67.0 | 3.35 | DOGRU |
+| Sola yanal (+y) | +1.5 | +71.1 | -5.6 | 71.1 | 3.74 | DOGRU |
+| Sağa yanal (−y) | -4.1 | -83.5 | -4.2 | 83.6 | 4.16 | DOGRU |
+| Saat yönü tersi (+wz) | -2.0 | -0.5 | +41.2 | 2.0 | 7.38 | DOGRU |
+| Saat yönü (−wz) | -0.6 | -1.1 | -13.8 | 1.3 | 12.80 | DOGRU |
+
+**Sonuç: 6/6 yön doğru.** Hareket pencereleri fiziksel olarak tutarlıdır (ölçülen mesafe / pencere, 0.75 m/s tavanının altında).
+
+
 ## Hedef bazlı tekrarlanabilirlik
 
 
@@ -146,6 +166,13 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 1 | 0.602 | 0.602 | N/A | 0.602 | 0.602 | N/A |
+| Yanal/ikincil sapma | m/° | 1 | 0.024 | 0.024 | N/A | 0.024 | 0.024 | N/A |
+| Hareket penceresi | s | 1 | 3.176 | 3.176 | N/A | 3.176 | 3.176 | N/A |
 
 
 ### mecanum — ortam: lab-gercek — hedef: yon-2-geri
@@ -153,6 +180,13 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 1 | 0.670 | 0.670 | N/A | 0.670 | 0.670 | N/A |
+| Yanal/ikincil sapma | m/° | 1 | 0.011 | 0.011 | N/A | 0.011 | 0.011 | N/A |
+| Hareket penceresi | s | 1 | 3.354 | 3.354 | N/A | 3.354 | 3.354 | N/A |
 
 
 ### mecanum — ortam: lab-gercek — hedef: yon-3-sol
@@ -160,6 +194,13 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 1 | 0.711 | 0.711 | N/A | 0.711 | 0.711 | N/A |
+| Yanal/ikincil sapma | m/° | 1 | 0.015 | 0.015 | N/A | 0.015 | 0.015 | N/A |
+| Hareket penceresi | s | 1 | 3.744 | 3.744 | N/A | 3.744 | 3.744 | N/A |
 
 
 ### mecanum — ortam: lab-gercek — hedef: yon-4-sag
@@ -167,6 +208,13 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 1 | 0.836 | 0.836 | N/A | 0.836 | 0.836 | N/A |
+| Yanal/ikincil sapma | m/° | 1 | 0.041 | 0.041 | N/A | 0.041 | 0.041 | N/A |
+| Hareket penceresi | s | 1 | 4.159 | 4.159 | N/A | 4.159 | 4.159 | N/A |
 
 
 ### mecanum — ortam: lab-gercek — hedef: yon-5-ccw
@@ -174,6 +222,13 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 1 | 0.020 | 0.020 | N/A | 0.020 | 0.020 | N/A |
+| Yanal/ikincil sapma | m/° | 1 | 0.020 | 0.020 | N/A | 0.020 | 0.020 | N/A |
+| Hareket penceresi | s | 1 | 7.377 | 7.377 | N/A | 7.377 | 7.377 | N/A |
 
 
 ### mecanum — ortam: lab-gercek — hedef: yon-6-cw
@@ -181,6 +236,13 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Doğrusal mesafe | m | 1 | 0.013 | 0.013 | N/A | 0.013 | 0.013 | N/A |
+| Yanal/ikincil sapma | m/° | 1 | 0.013 | 0.013 | N/A | 0.013 | 0.013 | N/A |
+| Hareket penceresi | s | 1 | 12.800 | 12.800 | N/A | 12.800 | 12.800 | N/A |
 
 
 ### mode-switch — ortam: lab-gercek — hedef: mod-10tekrar

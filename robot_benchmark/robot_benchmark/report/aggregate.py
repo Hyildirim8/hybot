@@ -30,6 +30,8 @@ NUMERIC_METRICS = (
     "mode_switch_success_rate", "linear_distance_m", "angular_change_deg",
     "mode_switch_latency_mean_s", "mode_switch_latency_median_s",
     "mode_switch_latency_max_s",
+    "forward_component_m", "lateral_component_m", "lateral_deviation",
+    "motion_window_s",
 )
 
 UNITS = {
@@ -41,7 +43,9 @@ UNITS = {
     "camera_gap_total_s": "s", "runtime_duration_min": "dk",
     "battery_drop_per_hour": "birim/saat", "linear_distance_m": "m",
     "mode_switch_latency_mean_s": "s", "mode_switch_latency_median_s": "s",
-    "mode_switch_latency_max_s": "s",
+    "mode_switch_latency_max_s": "s", "forward_component_m": "m",
+    "lateral_component_m": "m", "lateral_deviation": "m/°",
+    "motion_window_s": "s",
     "angular_change_deg": "°",
 }
 
@@ -75,6 +79,10 @@ LABELS_TR = {
     "mode_switch_latency_mean_s": "Mod geçiş gecikmesi (ort)",
     "mode_switch_latency_median_s": "Mod geçiş gecikmesi (medyan)",
     "mode_switch_latency_max_s": "Mod geçiş gecikmesi (maks)",
+    "forward_component_m": "İleri bileşen",
+    "lateral_component_m": "Yanal bileşen",
+    "lateral_deviation": "Yanal/ikincil sapma",
+    "motion_window_s": "Hareket penceresi",
     "linear_distance_m": "Doğrusal mesafe",
     "angular_change_deg": "Açısal değişim",
 }
@@ -104,8 +112,21 @@ def metric_values(runs: list[dict], name: str) -> list[float | None]:
     return vals
 
 
-def summarize_group(runs: list[dict]) -> dict[str, Summary]:
-    return {m: summarize(metric_values(runs, m)) for m in NUMERIC_METRICS}
+# Yonu ISARETLI metrikler zit yonler arasinda HAVUZLANMAZ: ileri (+0.601 m) ile
+# geri (-0.670 m) ortalamasi ~0 verir ve "ileri bilesen ortalama -0.02 m" gibi
+# anlamsiz bir satir uretir. Mecanum icin yon bazli ayri tablo (tables.
+# mecanum_rows) zaten var; genel ozette bu satirlar bastirilir. Isaretsiz
+# olanlar (sapma buyuklugu, pencere, mesafe) anlamli kalir.
+SIGNED_DIRECTIONAL = frozenset({
+    "forward_component_m", "lateral_component_m", "angular_change_deg",
+})
+
+
+def summarize_group(runs: list[dict], kind: str | None = None
+                    ) -> dict[str, Summary]:
+    skip = SIGNED_DIRECTIONAL if kind == "mecanum" else frozenset()
+    return {m: summarize(metric_values(runs, m))
+            for m in NUMERIC_METRICS if m not in skip}
 
 
 # Konumlandirma DOGRULUGU yalnizca hedefe ULASILAN kosularda anlamlidir:
@@ -149,7 +170,8 @@ def build_summary(base: Path | None = None) -> dict[str, Any]:
             "run_count": len(group),
             "goal_success_rate": rate,
             "goal_status_counts": counts,
-            "metrics": {m: s.as_dict() for m, s in summarize_group(group).items()
+            "metrics": {m: s.as_dict()
+                        for m, s in summarize_group(group, kind).items()
                         if s.n > 0},
             "accuracy_succeeded_only": {
                 m: s.as_dict() for m, s in summarize_accuracy(group).items()
@@ -166,7 +188,8 @@ def build_summary(base: Path | None = None) -> dict[str, Any]:
             "run_count": len(group),
             "goal_success_rate": rate,
             "goal_status_counts": counts,
-            "metrics": {m: s.as_dict() for m, s in summarize_group(group).items()
+            "metrics": {m: s.as_dict()
+                        for m, s in summarize_group(group, kind).items()
                         if s.n > 0},
             "accuracy_succeeded_only": {
                 m: s.as_dict() for m, s in summarize_accuracy(group).items()

@@ -100,7 +100,8 @@ def generate_all(out_dir: Path, base: Path | None = None) -> dict[str, Any]:
         return result
 
     for fn in (_plot_success_rate, _plot_goal_duration, _plot_planned_vs_actual,
-               _plot_error_box, _plot_replan, _plot_map_coverage, _plot_camera):
+               _plot_error_box, _plot_replan, _plot_map_coverage, _plot_camera,
+               _plot_mecanum):
         try:
             p = fn(runs, out_dir)
             if p is None:
@@ -331,6 +332,93 @@ def _plot_camera(runs, out_dir: Path) -> Path | None:
              "raporlanır (güvenilir damga yoksa N/A).",
              ha="right", va="bottom", fontsize=8, alpha=0.75)
     out = out_dir / "07_kamera_fps_aralik.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, dpi=DPI, bbox_inches="tight")
+    plt.close(fig)
+    return out
+
+
+# ── 8. mecanum yön doğruluğu ──────────────────────────────────────────────────
+def _plot_mecanum(runs, out_dir: Path) -> Path | None:
+    """Her yön için BEKLENEN bileşen ve istenmeyen SAPMA yan yana.
+
+    Tek bir "mesafe" çubuğu yanıltıcı olurdu: önemli olan hareketin doğru
+    eksende olması. Bu yüzden beklenen bileşen ile sapma ayrı çizilir.
+    """
+    order = ["ileri", "geri", "sol", "sag", "ccw", "cw"]
+    tr = {"ileri": "İleri\n(+x)", "geri": "Geri\n(−x)", "sol": "Sola\n(+y)",
+          "sag": "Sağa\n(−y)", "ccw": "CCW\n(+wz)", "cw": "CW\n(−wz)"}
+    by = {}
+    for r in runs:
+        if r["meta"].get("kind") != "mecanum":
+            continue
+        d = r["metrics"].get("mecanum_direction")
+        if d:
+            by[d] = r["metrics"]
+    keys = [k for k in order if k in by]
+    if not keys:
+        return None
+
+    lin = [k for k in keys if k in ("ileri", "geri", "sol", "sag")]
+    rot = [k for k in keys if k in ("ccw", "cw")]
+    fig, axes = plt.subplots(1, 2, figsize=(12.0, 5.2),
+                             gridspec_kw={"width_ratios": [2, 1]})
+
+    if lin:
+        prim, dev, labels, verdicts = [], [], [], []
+        for k in lin:
+            m = by[k]
+            p = (m.get("forward_component_m") if k in ("ileri", "geri")
+                 else m.get("lateral_component_m"))
+            d = (m.get("lateral_component_m") if k in ("ileri", "geri")
+                 else m.get("forward_component_m"))
+            prim.append(abs(p or 0.0) * 100)
+            dev.append(abs(d or 0.0) * 100)
+            labels.append(tr[k])
+            verdicts.append(m.get("direction_verdict"))
+        idx = range(len(lin))
+        w = 0.38
+        axes[0].bar([i - w / 2 for i in idx], prim, w, label="Beklenen bileşen",
+                    color="#2f9e63", edgecolor="black", linewidth=0.5)
+        axes[0].bar([i + w / 2 for i in idx], dev, w, label="İstenmeyen sapma",
+                    color="#d1495b", edgecolor="black", linewidth=0.5)
+        for i, (pv, vd) in enumerate(zip(prim, verdicts)):
+            axes[0].text(i, pv + 2.5, vd or "", ha="center", fontsize=8,
+                         fontweight="bold")
+        axes[0].set_xticks(list(idx))
+        axes[0].set_xticklabels(labels)
+        axes[0].set_title("Doğrusal Yönler")
+        axes[0].set_xlabel("Komut yönü")
+        axes[0].set_ylabel("Yer değiştirme (cm)")
+        axes[0].legend(fontsize=9)
+        axes[0].grid(True, alpha=0.3, linestyle="--")
+        axes[0].set_ylim(0, max(prim) * 1.25 + 5)
+
+    if rot:
+        ang = [abs(by[k].get("angular_change_deg") or 0.0) for k in rot]
+        drift = [(by[k].get("linear_distance_m") or 0.0) * 100 for k in rot]
+        idx = range(len(rot))
+        axes[1].bar([i - 0.19 for i in idx], ang, 0.38, label="Dönme (°)",
+                    color="#3b7dd8", edgecolor="black", linewidth=0.5)
+        axes[1].bar([i + 0.19 for i in idx], drift, 0.38,
+                    label="Yer kayması (cm)", color="#e0902b",
+                    edgecolor="black", linewidth=0.5)
+        axes[1].set_xticks(list(idx))
+        axes[1].set_xticklabels([tr[k] for k in rot])
+        axes[1].set_title("Dönüş Yönleri")
+        axes[1].set_xlabel("Komut yönü")
+        axes[1].set_ylabel("Derece / cm")
+        axes[1].legend(fontsize=9)
+        axes[1].grid(True, alpha=0.3, linestyle="--")
+
+    ok = sum(1 for k in keys if by[k].get("direction_verdict") == "DOGRU")
+    fig.suptitle(f"Mecanum Yön Doğrulaması ({ok}/{len(keys)} yön doğru)",
+                 fontsize=13, fontweight="bold")
+    fig.text(0.99, 0.01,
+             "Hareketi operatör joystick ile yaptı; ölçüm başlangıç/bitiş "
+             "pozundan. Sapma düşük = temiz holonomik hareket.",
+             ha="right", va="bottom", fontsize=8, alpha=0.75)
+    out = out_dir / "08_mecanum_yon.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out, dpi=DPI, bbox_inches="tight")
     plt.close(fig)
