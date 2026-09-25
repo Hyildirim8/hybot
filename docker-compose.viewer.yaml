@@ -36,8 +36,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile
-      target: runtime
-    image: ecza-robotu:runtime
+      target: viewer
+    image: ecza-robotu:viewer
     network_mode: host   # required for Fast-DDS UDP multicast discovery, same as the Pi stack
     environment:
       ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
@@ -47,6 +47,12 @@ services:
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ./src/ecza_description/rviz/rover.rviz:/config/rover.rviz:ro
+      - ./scripts/rviz_pc_config.py:/config/rviz_pc_config.py:ro
     devices:
       - /dev/dri:/dev/dri
-    command: ["rviz2", "-d", "/config/rover.rviz", "--ros-args", "-p", "use_sim_time:=false"]
+    command:
+      - bash
+      - -c
+      - |
+        python3 /config/rviz_pc_config.py /config/rover.rviz /tmp/rover_pc.rviz &&
+        exec rviz2 -d /tmp/rover_pc.rviz --ros-args -p use_sim_time:=false

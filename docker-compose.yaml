@@ -296,10 +296,10 @@ services:
   # reaches the host streamer at 127.0.0.1) and republishes frames as
   # sensor_msgs/CompressedImage, same pattern as the esp32cam `camera` service.
   # Publishes /camera_csi/image_raw/compressed.
-  # View at http://<rpi-ip>:8081/ or rqt_image_view — deliberately NOT added
-  # as an rviz Image display (segfaults rviz2 under this container's
-  # Xvfb+llvmpipe setup even when disabled; see rover.rviz's Map display
-  # comment). scripts/remote_teleop_client.py instead pulls chunked-JPEG
+  # View in the PC RViz viewer, at http://<rpi-ip>:8081/ or rqt_image_view.
+  # The Pi's own RViz config omits Image (Xvfb+llvmpipe crashes even when
+  # disabled); the PC viewer adds its camera dock at startup.
+  # scripts/remote_teleop_client.py instead pulls chunked-JPEG
   # frames over UDP on CSI_CAM_UDP_PORT — more stable than HTTP/TCP over a
   # flaky WiFi link back to the operator's PC (a lost chunk drops one frame
   # instead of stalling the stream on a TCP retransmit).

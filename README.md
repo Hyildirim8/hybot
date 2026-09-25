@@ -228,6 +228,15 @@ bash scripts/launch.sh --nav --lan
 ./scripts/rviz_viewer_pc.sh --down       # durdur
 ```
 
+PC'deki RViz, haritanın yanında **RPi Camera** görüntü panelini de açar.
+Bu güncellemeden sonra bir kez `./scripts/rviz_viewer_pc.sh --build` çalıştırın;
+PC imajına JPEG görüntü çözme eklentisi kurulur. Kamera
+`/camera_csi/image_raw/compressed` üzerinden **Best Effort** ile alınır.
+Paneli Displays listesindeki **RPi Camera** kutusundan açıp kapatabilirsiniz.
+Pi üzerindeki `csi_camera` servisi çalışıyor olmalıdır.
+Paylaşılan harita ayarları her açılışta alınır; kamera sadece PC için oluşturulan
+geçici RViz yapılandırmasına eklenir.
+
 > ### ⚠️ `--lan` olmadan RViz **boş açılır, hata da vermez**
 >
 > Robot varsayılan olarak `ignoreParticipantFlags=FILTER_DIFFERENT_HOST` ile
@@ -269,12 +278,13 @@ ayırt etmez (dead-man, strafe, pivot, scan güvenliği hepsi aynı şekilde ge�
 
 ### 2.3 Kamera
 
-Kamera iki yoldan yayınlanır:
+Kamera üç yoldan yayınlanır:
 
 | Yol | Adres | Notlar |
 |---|---|---|
 | UDP (önerilen) | `<pi-ip>:8082` | Parçalı JPEG; kayıp paket sadece o kareyi düşürür |
 | HTTP (MJPEG) | `http://<pi-ip>:8081/` | Tarayıcıdan bakmak için; Wi-Fi'da TCP takılabilir |
+| ROS / PC RViz | `/camera_csi/image_raw/compressed` | PC viewer içindeki **RPi Camera** paneli; LAN modu gerekir |
 
 `--cam` ile uzaktan sürüş penceresinde gösterilir. Yayını uzaktan
 durdurup başlatmak için:

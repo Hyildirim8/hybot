@@ -179,3 +179,13 @@ WORKDIR /ws
 USER rosuser
 
 ENTRYPOINT ["/entrypoint.sh"]
+
+# PC-only viewer: decode the Pi's JPEG stream locally for RViz's Image dock.
+# Robot services continue to build the runtime target above.
+FROM runtime AS viewer
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ros-humble-compressed-image-transport \
+        python3-yaml && \
+    rm -rf /var/lib/apt/lists/*
+USER rosuser
