@@ -101,8 +101,9 @@
     auto_half_width: 0.16
     auto_obstacle_margin: 0.01
     # 0.6 -> 1.0: ufuk hızla ölçeklenmeli. Eski değer 0.30 m/s için seçilmişti;
-    # MPPI vx_max artık 0.50 m/s, frenleme mesafesi ve komut gecikmesi büyüdü.
-    auto_collision_horizon: 1.0    # 0.50 m/s hızda frenleme + veri/komut gecikmesi
+    # MPPI vx_max 0.60 m/s; kapı ayrıca hız ve veri yaşına göre fren mesafesini hesaplar.
+    auto_collision_horizon: 1.0    # alt sınır; gereken frenleme ufku daha uzunsa artırılır
+    auto_max_wheel_speed_rad_s: 18.75 # firmware motor.h sınırı; birleşik hareketi orantılı sınırla
     scan_topic: "/scan"
     front_obstacle_stop_distance: 0.30 # 0.45 geçilebilir aralıkları da kapatıyordu — dar geçiş için düşürüldü
     front_obstacle_clear_distance: 0.50
@@ -117,14 +118,14 @@
     btn_debounce_ms: 150           # buton sıçramasını önle
     map_save_dir: "/maps"          # kayıt dizini (navigation container'daki bağlama)
     frontier_min_cells: 8          # küçük frontier kümelerini görmezden gel
-    frontier_obstacle_padding_m: 0.20 # dar kapı/koridor frontierlarını gereksiz eleme
+    frontier_obstacle_padding_m: 0.18 # dar kapı/koridor frontierlarını gereksiz eleme
     failed_goal_blacklist_radius_m: 0.32 # dar alanlarda komşu geçerli hedefleri karartma
     max_failed_goals: 20
-    goal_timeout_s: 12.0           # saniye — takılan Nav2 hedefi en fazla 12 s sürebilir; 30 s "donup kalma" hissi veriyordu
+    goal_timeout_s: 45.0           # Nav2 kapı geçişi ve güvenli recovery için süre
     explore_interval_s: 2.0        # saniye — frontier hesabı CPU-yoğun; 1.0 komut döngüsünü boğup kesik harekete yol açıyordu
     visited_penalty_radius_m: 3.0  # oda boyutunda ziyaret hafızası — haritalanan odaya geri dönmeyi azalt
-                                   # (ceza tam dışlama değil ×0.02 skor; başka aday yoksa yine gidilir)
-    direct_explore_fallback: true   # Nav2 hedef kabul etmezse düşük hızda keşif sürüşü
+                                   # Duvar arkasını ziyaret sayma; yeni alanlar kesin öncelikli, sonra eski alanlar
+    direct_explore_fallback: false  # Hedef beklerken plansız hareket etme
     lidar_angle_offset_deg: 180.0   # lidar is physically mounted 180° reversed on chassis
     # Direct exploration fallback should be quicker than before, but still
     # gentler than full-speed teleop so SLAM does not smear corridor corners.

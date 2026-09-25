@@ -52,6 +52,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy
 from action_msgs.srv import CancelGoal
 from geometry_msgs.msg import PoseStamped, Twist
 from sensor_msgs.msg import Joy, LaserScan
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
 
 
@@ -103,6 +104,7 @@ class TeleopNode(Node):
         self.declare_parameter("auto_half_width", 0.16)
         self.declare_parameter("auto_obstacle_margin", 0.01)
         self.declare_parameter("auto_collision_horizon", 0.6)
+        self.declare_parameter("auto_max_wheel_speed_rad_s", 18.75)
 
         self._ax_lx = self.get_parameter("axis_linear_x").value
         self._ax_ly = self.get_parameter("axis_linear_y").value
@@ -179,6 +181,12 @@ class TeleopNode(Node):
         self._auto_half_width = float(self.get_parameter("auto_half_width").value)
         self._auto_margin = float(self.get_parameter("auto_obstacle_margin").value)
         self._auto_horizon = float(self.get_parameter("auto_collision_horizon").value)
+        self._auto_wheel_surface_limit = (self._pivot_wheel_radius * float(
+            self.get_parameter("auto_max_wheel_speed_rad_s").value))
+        self._last_output = Twist()
+        self._measured_twist = Twist()
+        self._last_odom_time = 0.0
+        self._front_blind = False
         self._last_nav_time = 0.0
         self._last_scan_time = 0.0
         self._scan_points = []
@@ -261,6 +269,9 @@ class TeleopNode(Node):
             ),
         ]
 
+        self._odom_sub = self.create_subscription(
+            Odometry, "/odometry/filtered", self._odom_cb, best_effort_qos
+        )
         self._scan_sub = None
         if self._enable_scan_safety:
             self._scan_sub = self.create_subscription(
@@ -381,6 +392,7 @@ class TeleopNode(Node):
         self._last_scan_time = 0.0
         self._scan_points = []
         if not math.isfinite(age) or age > self._scan_timeout or age < -0.2:
+            self._enforce_latest_scan()
             return
         min_distance = math.inf
         left_clearance = math.inf
@@ -425,14 +437,16 @@ class TeleopNode(Node):
             elif -math.radians(110.0) <= shifted < 0.0:
                 right_clearance = min(right_clearance, float(distance))
 
-        # Duvara yapışık körlük: ön konideki ışınların neredeyse tamamı geçersizse
-        # VE ±60° içindeki en yakın geçerli ışın < 0.45 m ise duvar lidar min
-        # menzilinin içindedir → önü sıfır mesafede DOLU say (acil durdurma).
-        # Yakınlık kanıtı şart: açık alanda uzak/koyu yüzeyler de geçersiz ışın
-        # döndürür — kanıtsız körlük "0.10 m engel" sanılıp robotu donduruyordu.
-        if (front_total >= 12
-                and front_valid <= max(2, int(front_total * 0.10))
-                and front_region_min < 0.45):
+        # Ön koni körleşirse robotun gövde koridorundaki yakın dönüşleri
+        # duvar kanıtı say. Kapı kenarları gövdenin dışındaysa önü kapatma.
+        # Körlük doğrulanmışsa ön ışınlar geri gelene kadar durumu koru.
+        missing_front = front_total >= 12 and front_valid <= max(2, int(front_total * 0.10))
+        # Door posts outside the body lane are not evidence of a blind wall.
+        close_in_lane = any(0.0 < x < self._auto_half_length + 0.07
+                            and abs(y) <= self._auto_half_width + self._auto_margin
+                            for x, y in self._scan_points)
+        self._front_blind = missing_front and (close_in_lane or self._front_blind)
+        if self._front_blind:
             min_distance = min(min_distance, 0.10)
 
         self._front_obstacle_distance = min_distance
@@ -445,7 +459,29 @@ class TeleopNode(Node):
         if self._scan_points:
             self._last_scan_time = time.monotonic() - max(0.0, age)
 
-    def _auto_scan_safe(self, twist: Twist) -> bool:
+        self._enforce_latest_scan()
+
+    def _odom_cb(self, msg: Odometry) -> None:
+        age = self.get_clock().now().nanoseconds * 1e-9 - (
+            msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9)
+        self._last_odom_time = time.monotonic() - max(0.0, age) if -0.2 <= age <= 0.5 else 0.0
+        # Suppress stationary EKF jitter below the footprint margin; a tiny
+        # residual yaw must not prevent a straight retreat from a close wall.
+        self._measured_twist = Twist()
+        for axis in ('x', 'y'):
+            v = getattr(msg.twist.twist.linear, axis)
+            setattr(self._measured_twist.linear, axis, 0.0 if abs(v) < 0.003 else v)
+        w = msg.twist.twist.angular.z
+        self._measured_twist.angular.z = 0.0 if abs(w) < 0.01 else w
+
+    def _enforce_latest_scan(self) -> None:
+        # A newly arrived obstacle must stop the last command immediately,
+        # even if the controller has not published another command yet.
+        if (self._autonomous and self._enable_scan_safety
+                and not self._auto_scan_safe(self._last_output, braking=True)):
+            self._publish_zero()
+
+    def _auto_scan_safe(self, twist: Twist, braking: bool = False) -> bool:
         """Check the requested body motion against a swept, padded rectangle.
 
         This gate only stops commands; it never invents a turn or strafe that
@@ -459,12 +495,19 @@ class TeleopNode(Node):
             return True
         if time.monotonic() - self._last_scan_time > self._scan_timeout:
             return False
+        if self._front_blind and (vx > 0.0 or abs(wz) > 1e-6):
+            return False
+        # Include scan age and command/actuator reaction latency. Braking
+        # acceleration is deliberately below the Nav2 smoother's limit.
+        stop_time = (0.25 + max(0.0, time.monotonic() - self._last_scan_time)
+                     + 0.5 * max(math.hypot(vx, vy) / 0.5, abs(wz) / 1.0))
+        horizon = stop_time if braking else max(self._auto_horizon, stop_time)
         length = self._auto_half_length + self._auto_margin
         width = self._auto_half_width + self._auto_margin
-        reach = math.hypot(length, width) + math.hypot(vx, vy) * self._auto_horizon
+        reach = math.hypot(length, width) + math.hypot(vx, vy) * horizon
         points = [(x, y) for x, y in self._scan_points if math.hypot(x, y) <= reach]
         for step in range(1, 13):
-            t = self._auto_horizon * step / 12.0
+            t = horizon * step / 12.0
             yaw = wz * t
             c, s = math.cos(yaw), math.sin(yaw)
             if abs(wz) < 1e-6:
@@ -490,13 +533,42 @@ class TeleopNode(Node):
             return twist
 
         if self._autonomous:
-            if not self._auto_scan_safe(twist):
+            if not all(math.isfinite(v) for v in (twist.linear.x, twist.linear.y, twist.angular.z)):
+                return Twist()
+            if not self._twist_has_motion(twist):
+                return twist
+            # Respect the combined mecanum wheel limit, preserving curvature
+            # instead of letting firmware clip each wheel independently.
+            demand = (abs(twist.linear.x) + abs(twist.linear.y)
+                      + self._pivot_k * abs(twist.angular.z))
+            if demand > self._auto_wheel_surface_limit:
+                scale = self._auto_wheel_surface_limit / demand
+                limited = Twist()
+                limited.linear.x = twist.linear.x * scale
+                limited.linear.y = twist.linear.y * scale
+                limited.angular.z = twist.angular.z * scale
+                twist = limited
+            # A lower request cannot hide momentum from the actual robot.
+            if (time.monotonic() - self._last_odom_time > 0.5
+                    or not self._auto_scan_safe(self._measured_twist, braking=True)
+                    or not self._auto_scan_safe(twist, braking=True)):
                 self.get_logger().warn(
-                    "AUTO durduruldu: hareket yönünde engel veya güncel lidar verisi yok",
+                    "AUTO durduruldu: fren mesafesinde engel veya güncel sensör verisi yok",
                     throttle_duration_sec=2.0,
                 )
                 return Twist()
-            return twist
+            if self._auto_scan_safe(twist):
+                return twist
+            # Slow along the SAME checked curve instead of stopping at every
+            # doorway. Never invent lateral motion or a new steering direction.
+            for scale in (0.75, 0.5, 0.25):
+                safe = Twist()
+                safe.linear.x = twist.linear.x * scale
+                safe.linear.y = twist.linear.y * scale
+                safe.angular.z = twist.angular.z * scale
+                if self._auto_scan_safe(safe):
+                    return safe
+            return Twist()
 
         # Teleop mode: normal scan safety with configured threshold.
         if twist.linear.x <= 0.0 or not self._front_blocked:
@@ -738,6 +810,12 @@ class TeleopNode(Node):
                     or (self._enable_scan_safety
                         and now - self._last_scan_time > self._scan_timeout)):
                 self._publish_zero()
+            elif self._enable_scan_safety:
+                if (now - self._last_odom_time > 0.5
+                        or not self._auto_scan_safe(self._measured_twist, braking=True)):
+                    self._publish_zero()
+                else:
+                    self._enforce_latest_scan()
             return
         elapsed = (self.get_clock().now() - self._last_joy).nanoseconds * 1e-9
         timeout = self.get_parameter("joy_watchdog_timeout_ms").value / 1000.0
@@ -752,6 +830,7 @@ class TeleopNode(Node):
         self._publish_cmd(Twist())
 
     def _publish_cmd(self, twist: Twist) -> None:
+        self._last_output = twist
         self._cmd_pub.publish(twist)
         self._cmd_vel_pub.publish(twist)
 

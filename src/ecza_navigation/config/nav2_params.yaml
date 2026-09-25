@@ -1,5 +1,5 @@
 # Nav2 for the mecanum rover. MPPI uses the same REP-103 body frame as
-# ros2_control and teleop. Conservative limits keep combined wheel commands
+# ros2_control and teleop. The final AUTO gate scales combined wheel commands
 # below 18.75 rad/s at r=0.04 m: vx + |vy| + 0.32*|wz| <= 0.75 m/s.
 
 amcl:
@@ -151,13 +151,12 @@ controller_server:
       #   saf ileri  -> teker = vx/0.04 = 25*vx  -> vx  <= 0.75
       #   saf donus  -> teker = wz*0.32/0.04 = 8*wz -> wz <= 2.34
       #   birlesik   -> 25*vx + 8*wz + 25*vy <= 18.75
-      # Secilen degerlerde en kotu hal 12.5+6.4+1.25 = 20.15, yani yalnizca
-      # ucu birden tam gazda hafif saturasyon. Saturasyon bir bileseni kirpip
-      # hareketi bozdugu icin bilincli olarak sinirin yakininda kalindi.
+      # Birlesik komut siniri asarsa teleop AUTO kapisi vx/vy/wz'yi ayni
+      # oranda azaltir; firmware'in tek tek teker kirpmasi rotayi bozmaz.
       vx_std: 0.22             # 0.15 -> daha yuksek hiz icin daha genis ileri ornekleme
       vy_std: 0.03             # 0.10 -> yan ornekleme neredeyse kapali (en dusuk oncelik)
       wz_std: 0.4              # 0.3  -> donus daha cok denenir (ikinci oncelik)
-      vx_max: 0.50             # 0.30 -> %67 hizli
+      vx_max: 0.60             # 0.50 -> %20 daha hizli ileri hareket
       vx_min: -0.25            # 0.15 -> geri kacis da hizlansin
       vy_max: 0.05             # 0.15 -> yan hareket son care
       wz_max: 0.80             # 0.60 -> donerek yonelme hizlansin
@@ -257,8 +256,8 @@ local_costmap:
       plugins: ["obstacle_layer", "inflation_layer"]
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.30
       obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: true
@@ -353,8 +352,8 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         # A continuous cost gradient favours corridor centres before contact.
-        cost_scaling_factor: 3.0
-        inflation_radius: 0.35
+        cost_scaling_factor: 5.0
+        inflation_radius: 0.30
       always_send_full_costmap: true
 
 map_server:
@@ -449,7 +448,7 @@ velocity_smoother:
     # MPPI limitleriyle birebir hizali olmali: smoother daha dar olursa
     # MPPI'nin urettigi komut kirpilir ve robot planladigindan farkli hareket
     # eder (bu da "garip hareket" olarak gorunur).
-    max_velocity: [0.50, 0.05, 0.80]   # vx, vy, wz — MPPI vx_max/vy_max/wz_max ile ayni
+    max_velocity: [0.60, 0.05, 0.80]   # vx, vy, wz — MPPI vx_max/vy_max/wz_max ile ayni
     min_velocity: [-0.25, -0.05, -0.80]
     max_accel: [0.8, 0.4, 1.4]         # daha hizli kalkis; donus ivmesi en yuksek
     max_decel: [-1.0, -0.6, -1.6]      # frenleme ivmeden buyuk: engelde hizli dursun

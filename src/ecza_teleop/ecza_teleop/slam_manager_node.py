@@ -63,7 +63,7 @@ class SlamManagerNode(Node):
         self.declare_parameter("goal_timeout_s", 45.0)     # hedefe max bekleme
         self.declare_parameter("explore_interval_s", 3.0)  # frontier güncelleme periyodu
         self.declare_parameter("lidar_angle_offset_deg", 0.0)
-        self.declare_parameter("direct_explore_fallback", True)
+        self.declare_parameter("direct_explore_fallback", False)
         self.declare_parameter("direct_explore_speed", 0.18)
         self.declare_parameter("direct_explore_turn_speed", 0.45)
         self.declare_parameter("direct_explore_backup_speed", 0.12)
@@ -155,6 +155,7 @@ class SlamManagerNode(Node):
         self._exploring: bool              = False
         self._map: Optional[OccupancyGrid] = None
         self._autonomous: bool             = False
+        self._goal_generation = 0
         self._goal_handle                  = None
         self._active_goal: Optional[Tuple[float, float]] = None
         self._goal_sent_at: float          = 0.0
@@ -721,7 +722,7 @@ class SlamManagerNode(Node):
         Akış:
           1. Arka plan thread'den hazır frontier varsa → Nav2 hedefi gönder.
           2. Nav2 aktif geziyorsa    → sadece timeout kontrolü yap, karışma.
-          3. Boşta (hedef yok)       → background thread başlat; o sırada direct_explore.
+          3. Boşta (hedef yok)       → background thread başlat; yeni güvenli hedefi bekle.
         """
         if not self._exploring:
             return
@@ -744,7 +745,7 @@ class SlamManagerNode(Node):
         self._record_visited_position()
 
         # ── 1. Arka plandan frontier hazırsa Nav2 hedefi gönder ─────────────
-        if self._pending_frontier is not None:
+        if self._pending_frontier is not None and self._active_goal is None:
             frontier = self._pending_frontier
             self._pending_frontier = None
             self._direct_explore_active = False   # Nav2 devralıyor
@@ -752,26 +753,16 @@ class SlamManagerNode(Node):
             return
 
         # ── 2. Nav2 aktif geziyorsa — sıkışma ve timeout izle ────────────────
-        if self._goal_handle is not None:
-            # Duvara sıkışma tespiti: Nav2 hedefi sürerken ön mesafe kaçış
-            # eşiğine indiyse DWB oradan çıkamaz (tüm yörüngeler çarpışmada
-            # görünür, geri dahil) ve robot timeout'a kadar donup kalıyordu.
-            # Hedefi hemen iptal et — direct explore'un geri çekilme kaçışı
-            # devralsın; hedef kara listeye GİRMEZ (konumun suçu değil).
-            if self._front_obstacle_distance <= self._direct_escape_distance * 1.3:
-                self.get_logger().warn(
-                    f"Nav2 sürerken engele sıkışıldı (ön={self._front_obstacle_distance:.2f}m)"
-                    " — hedef iptal, kaçış devralıyor")
-                self._cancel_goal()
-                self._enable_direct_explore("engele sıkışma")
-                return
+        if self._active_goal is not None:
+            # Nav2 owns avoidance and recovery throughout the goal, including
+            # while its asynchronous acceptance is pending.
             elapsed = time.monotonic() - self._goal_sent_at
             if elapsed > self._goal_timeout:
                 self.get_logger().warn(
                     f"Hedef zaman aşımı ({elapsed:.0f}s) — iptal ediliyor"
                 )
-                self._cancel_goal()
                 self._blacklist_active_goal()
+                self._cancel_goal()
                 self._enable_direct_explore("hedef zaman aşımı")
             return  # Nav2 sürüyor, karışma
 
@@ -794,6 +785,7 @@ class SlamManagerNode(Node):
         with self._frontier_lock:
             self._frontier_generation += 1
             self._frontier_target_angle = None
+            self._pending_frontier = None
 
     def _compute_frontier_bg(self, map_snap: OccupancyGrid, generation: int,
                              visited_snap: List[Tuple[float, float]]) -> None:
@@ -805,8 +797,11 @@ class SlamManagerNode(Node):
                 return   # keşif iptal edildi, sonucu çöp
 
         if frontier is None:
-            self._frontier_target_angle = None
-            self._pending_frontier = None
+            with self._frontier_lock:
+                if generation != self._frontier_generation:
+                    return
+                self._frontier_target_angle = None
+                self._pending_frontier = None
             self.get_logger().info(
                 "Tüm frontierlar keşfedildi veya kara listede",
                 throttle_duration_sec=10.0,
@@ -839,16 +834,18 @@ class SlamManagerNode(Node):
             pass
 
         # Main thread'e sinyal: bir sonraki _explore_tick'te Nav2 hedefi gönder
-        self._pending_frontier = frontier
+        with self._frontier_lock:
+            if generation == self._frontier_generation:
+                self._pending_frontier = frontier
 
     # ── Frontier bulma ────────────────────────────────────────────────────────
 
     def _record_visited_position(self) -> None:
-        """Keşif sırasında robot konumunu 15 saniyede bir ziyaret listesine ekle."""
+        """Remember the explored route in map coordinates until explicit reset."""
         if not (self._exploring and self._autonomous):
             return
         now = time.monotonic()
-        if now - self._last_visited_t < 8.0:
+        if now - self._last_visited_t < 1.0:
             return
         try:
             tf = self._tf_buffer.lookup_transform(
@@ -856,9 +853,9 @@ class SlamManagerNode(Node):
                 timeout=rclpy.duration.Duration(seconds=0.05),
             )
             pos = (tf.transform.translation.x, tf.transform.translation.y)
-            self._visited_positions.append(pos)
-            if len(self._visited_positions) > 200:
-                self._visited_positions = self._visited_positions[-200:]
+            if not any(math.hypot(pos[0] - x, pos[1] - y) < 0.35
+                       for x, y in self._visited_positions):
+                self._visited_positions.append(pos)
             self._last_visited_t = now
         except Exception:
             pass
@@ -866,8 +863,8 @@ class SlamManagerNode(Node):
     def _pick_frontier_from(self, m: OccupancyGrid,
                             visited: List[Tuple[float, float]] = None) -> Optional[Tuple[float, float]]:
         """
-        Verilen harita üzerinde frontier hücrelerini bul, en büyük kümenin
-        dünya koordinatlarındaki merkezini döndür.
+        Önce ziyaret edilmemiş frontierları seç; seçilen kümenin güvenli
+        bir hücresini dünya koordinatlarında döndür.
         """
         w, h   = m.info.width, m.info.height
         res    = m.info.resolution
@@ -879,29 +876,29 @@ class SlamManagerNode(Node):
 
         obstacle_padding_cells = max(1, int(math.ceil(self._frontier_padding_m / res)))
 
+        offsets = [(dx, dy)
+                   for dy in range(-obstacle_padding_cells, obstacle_padding_cells + 1)
+                   for dx in range(-obstacle_padding_cells, obstacle_padding_cells + 1)
+                   if math.hypot(max(0, abs(dx)-0.5), max(0, abs(dy)-0.5))*res
+                   <= self._frontier_padding_m]
+
         def near_obstacle(x: int, y: int) -> bool:
-            x0 = max(0, x - obstacle_padding_cells)
-            x1 = min(w, x + obstacle_padding_cells + 1)
-            y0 = max(0, y - obstacle_padding_cells)
-            y1 = min(h, y + obstacle_padding_cells + 1)
-            for oy_i in range(y0, y1):
-                row_i = oy_i * w
-                for ox_i in range(x0, x1):
-                    if data[row_i + ox_i] >= 50:
-                        return True
-            return False
+            # Measure to occupied cell edges; avoid square diagonal expansion.
+            return any(0 <= x+dx < w and 0 <= y+dy < h
+                       and data[(y+dy)*w+x+dx] >= 50 for dx, dy in offsets)
 
         # Frontier hücreleri bul: serbest (0), bilinmeyene komşu ve engelden uzak
         frontier_set: set = set()
         for y in range(1, h - 1):
             row = y * w
             for x in range(1, w - 1):
-                if data[row + x] != 0 or near_obstacle(x, y):
+                if data[row + x] != 0:
                     continue
                 for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                     nb = data[(y + dy) * w + (x + dx)]
                     if nb == -1 or nb == 255:
-                        frontier_set.add((x, y))
+                        if not near_obstacle(x, y):
+                            frontier_set.add((x, y))
                         break
 
         if not frontier_set:
@@ -921,8 +918,8 @@ class SlamManagerNode(Node):
                 remaining.discard(cell)
                 cluster.append(cell)
                 cx, cy = cell
-                for dx in range(-3, 4):
-                    for dy in range(-3, 4):
+                for dx in range(-1, 2):
+                    for dy in range(-1, 2):
                         nb = (cx + dx, cy + dy)
                         if nb in remaining:
                             queue.append(nb)
@@ -936,7 +933,9 @@ class SlamManagerNode(Node):
         def cluster_target(cluster: List[Tuple[int, int]]) -> Tuple[float, float]:
             cx_i = sum(p[0] for p in cluster) / len(cluster)
             cy_i = sum(p[1] for p in cluster) / len(cluster)
-            return (ox + cx_i * res, oy + cy_i * res)
+            # The centroid can lie in a wall or unknown space on curved fronts.
+            tx, ty = min(cluster, key=lambda p: ((p[0]-cx_i)**2 + (p[1]-cy_i)**2, p))
+            return (ox + (tx + 0.5) * res, oy + (ty + 0.5) * res)
 
         # Ziyaret edilen bölgeler için skoru önceden hesapla (arka plan thread'i, GIL korumalı)
         visited_sq = self._visited_penalty_radius_sq
@@ -945,7 +944,19 @@ class SlamManagerNode(Node):
             if not visited:
                 return False
             for vx, vy in visited:
-                if (wx - vx) ** 2 + (wy - vy) ** 2 <= visited_sq:
+                if (wx - vx) ** 2 + (wy - vy) ** 2 > visited_sq:
+                    continue
+                # A visited room must not mark its neighbour across a wall as
+                # visited. Require known free visibility along the whole line.
+                steps = max(1, int(math.ceil(math.hypot(wx-vx, wy-vy) / (res * 0.5))))
+                visible = True
+                for i in range(steps + 1):
+                    cx = math.floor((vx + (wx-vx)*i/steps - ox) / res)
+                    cy = math.floor((vy + (wy-vy)*i/steps - oy) / res)
+                    if not (0 <= cx < w and 0 <= cy < h) or data[cy*w + cx] != 0:
+                        visible = False
+                        break
+                if visible:
                     return True
             return False
 
@@ -954,11 +965,9 @@ class SlamManagerNode(Node):
             target = cluster_target(cluster)
             if self._goal_is_blacklisted(target):
                 continue
-            score = float(len(cluster))
-            if is_near_visited(target[0], target[1]):
-                score *= 0.02  # ziyaret edilmiş bölgeye %98 ceza → haritalanan odaya geri dönme;
-                               # başka aday kalmazsa yine de seçilebilir (tam dışlama değil)
-            candidates.append((score, target))
+            # Strict priority: no amount of old frontier area can outrank a
+            # new visible region. Revisit only after new candidates run out.
+            candidates.append(((not is_near_visited(*target), len(cluster)), target))
 
         if not candidates:
             return None
@@ -988,20 +997,25 @@ class SlamManagerNode(Node):
         self._goal_handle  = None
         self._active_goal = (wx, wy)
 
+        self._goal_generation += 1
+        generation = self._goal_generation
         send_fut = self._nav.send_goal_async(goal)
         send_fut.add_done_callback(
-            lambda future, target=(wx, wy): self._on_goal_accepted(future, target)
+            lambda future, target=(wx, wy): self._on_goal_accepted(future, target, generation)
         )
 
-    def _on_goal_accepted(self, future, target: Tuple[float, float]) -> None:
+    def _on_goal_accepted(self, future, target: Tuple[float, float], generation: int) -> None:
         try:
             handle = future.result()
         except Exception as exc:
+            if generation != self._goal_generation:
+                return
+            self._active_goal = None
             self.get_logger().warn(f"Keşif hedefi gönderilemedi: {exc}")
             if self._exploring and self._autonomous:
                 self._enable_direct_explore("hedef gönderilemedi")
             return
-        if not (self._exploring and self._autonomous):
+        if generation != self._goal_generation or not (self._exploring and self._autonomous):
             # Mod değişti / keşif kapandı: kabul edilen hedefi SAHİPSİZ BIRAKMA.
             # Önceden handle iptal edilmeden dönülüyordu → Nav2 hedefi sürmeye
             # devam ediyor, DWB komut basıyor, 5 s soğuma bitince auto_enable
@@ -1022,17 +1036,22 @@ class SlamManagerNode(Node):
         self._active_goal = target
         self._direct_explore_active = False   # Nav2 navige ediyor, direct_explore durur
         self._pub_status(f"Nav2 → ({target[0]:.1f}, {target[1]:.1f})")
-        handle.get_result_async().add_done_callback(self._on_goal_result)
+        handle.get_result_async().add_done_callback(
+            lambda future: self._on_goal_result(future, generation))
 
-    def _on_goal_result(self, future) -> None:
+    def _on_goal_result(self, future, generation: int) -> None:
+        if generation != self._goal_generation:
+            return  # A canceled old goal must not clear a newer goal.
         try:
             result = future.result()
             status = getattr(result, "status", 0)
             if status == 4:  # STATUS_SUCCEEDED
+                if self._active_goal is not None:
+                    self._visited_positions.append(self._active_goal)
                 self.get_logger().info("Frontier başarıyla tamamlandı — sonraki aranıyor")
                 self._pub_status("Frontier ✓")
                 self._enable_direct_explore("frontier tamamlandı")
-            elif status == 6:  # STATUS_CANCELED
+            elif status == 5:  # STATUS_CANCELED (6 is ABORTED)
                 if time.monotonic() < self._user_goal_until:
                     # Gerçek RViz hedefi öncelemesi (/goal_pose alındı) — duraklat.
                     self.get_logger().info("Keşif hedefi iptal edildi (kullanıcı hedefi önceledi)")
@@ -1063,6 +1082,7 @@ class SlamManagerNode(Node):
         self._goal_sent_at = 0.0
 
     def _cancel_goal(self) -> None:
+        self._goal_generation += 1
         if self._goal_handle is not None:
             self._goal_handle.cancel_goal_async()
             self._goal_handle = None
@@ -1080,6 +1100,7 @@ class SlamManagerNode(Node):
 
     def _enable_direct_explore(self, reason: str) -> None:
         if not self._direct_fallback_enabled:
+            self._direct_explore_active = False
             return
         if not self._direct_explore_active:
             self.get_logger().warn(
