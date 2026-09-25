@@ -99,8 +99,21 @@ def markdown_report(base: Path | None = None) -> str:
             rate = blk["goal_success_rate"]
             out.append(f"- Başarı oranı: "
                        f"**{NA if rate is None else f'%{rate*100:.1f}'}**\n")
+            acc = _metric_rows(blk.get("accuracy_succeeded_only", {}))
+            if acc:
+                out.append("**Konumlandırma doğruluğu — yalnızca hedefe "
+                           "ULAŞILAN koşular.** İptal edilen bir hedefte hata "
+                           "doğruluk değil, robotun nereye kadar gidebildiğidir; "
+                           "o koşular başarı oranında ve alttaki tüm-koşu "
+                           "tablosunda aynen sayılır.\n")
+                out.append("| " + " | ".join(HEADER) + " |")
+                out.append("|" + "|".join(["---"] * len(HEADER)) + "|")
+                for r in acc:
+                    out.append("| " + " | ".join(r) + " |")
+                out.append("")
             rows = _metric_rows(blk["metrics"])
             if rows:
+                out.append("**Tüm koşular (başarısızlar dahil).**\n")
                 out.append("| " + " | ".join(HEADER) + " |")
                 out.append("|" + "|".join(["---"] * len(HEADER)) + "|")
                 for r in rows:

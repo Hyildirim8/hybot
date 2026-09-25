@@ -17,7 +17,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from .aggregate import (collect, group_by, metric_values, status_breakdown)
+from .aggregate import (collect, group_by, metric_values,
+                        status_breakdown, succeeded_runs)
 
 DPI = 200
 FIGSIZE = (9.0, 5.2)
@@ -199,6 +200,9 @@ def _plot_error_box(runs, out_dir: Path) -> Path | None:
     for (goal,), g in sorted(groups.items()):
         if not goal:
             continue
+        # Yalnizca hedefe ULASILAN kosular: iptal edilen hedefte "hata"
+        # doğruluk olcusu degildir (olcum: bir aborted kosuda 11.8 m).
+        g = succeeded_runs(g)
         lin = [v for v in metric_values(g, "linear_error_m") if v is not None]
         ang = [v for v in metric_values(g, "angular_error_deg") if v is not None]
         if lin or ang:
@@ -226,7 +230,9 @@ def _plot_error_box(runs, out_dir: Path) -> Path | None:
         ax.grid(True, alpha=0.3, linestyle="--")
     fig.suptitle("Konumlandırma Doğruluğu ve Tekrarlanabilirliği",
                  fontsize=13, fontweight="bold")
-    fig.text(0.99, 0.01, "Hata map çerçevesinde: Nav2 hedefi ile son map pozu arası.",
+    fig.text(0.99, 0.01,
+             "Yalnızca hedefe ULAŞILAN koşular. Hata map çerçevesinde: "
+             "Nav2 hedefi ile son map pozu arası.",
              ha="right", va="bottom", fontsize=8, alpha=0.75)
     out = out_dir / "04_konum_hatasi_kutu.png"
     out.parent.mkdir(parents=True, exist_ok=True)

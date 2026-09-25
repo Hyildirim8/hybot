@@ -286,6 +286,64 @@ def cmd_battery(args) -> int:
     return 0
 
 
+def cmd_mark(args) -> int:
+    """Kaydedilmiş bir koşuya operatör gözlemi ekler (çarpışma, başarısız, not).
+
+    Arka planda/TTY'siz çalıştırılan testlerde operatör sorusu sorulamaz.
+    Bu komut aynı bilgiyi koşu bittikten SONRA, izlenebilir biçimde yazar:
+    metrics.json güncellenir, events.jsonl'a operator_mark olayı eklenir ve
+    run.csv yeniden üretilir. Değerin operatörden geldiği
+    collision_source alanıyla kayda geçer.
+    """
+    import json
+    from .store import results_dir as _rd, _atomic_json
+
+    base = Path(args.results) if args.results else _rd()
+    target = base / args.experiment_id
+    if not target.is_dir():
+        matches = sorted(base.glob(f"*{args.experiment_id}*"))
+        if len(matches) != 1:
+            say(f"HATA: koşu bulunamadı veya birden fazla eşleşti: {args.experiment_id}")
+            return 2
+        target = matches[0]
+
+    mpath = target / "metrics.json"
+    metrics = json.loads(mpath.read_text(encoding="utf-8")) if mpath.is_file() else {}
+    changed = {}
+    if args.collision is not None:
+        metrics["operator_collision_marked"] = args.collision
+        metrics["collision_source"] = "operator_mark"
+        changed["operator_collision_marked"] = args.collision
+    if args.failed:
+        metrics["operator_marked_failed"] = True
+        changed["operator_marked_failed"] = True
+    if args.note:
+        prev = metrics.get("operator_note_extra") or ""
+        metrics["operator_note_extra"] = (prev + " | " + args.note).strip(" |")
+        changed["operator_note_extra"] = metrics["operator_note_extra"]
+    if not changed:
+        say("Değişiklik verilmedi (--collision / --failed / --note kullanın).")
+        return 1
+
+    _atomic_json(mpath, metrics)
+    with open(target / "events.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"kind": "operator_mark", **changed},
+                            ensure_ascii=False) + "\n")
+    # run.csv'yi metrics + meta'dan yeniden üret
+    import csv as _csv
+    meta = json.loads((target / "meta.json").read_text(encoding="utf-8"))
+    flat = dict(meta)
+    for k, v in metrics.items():
+        flat[k] = (json.dumps(v, ensure_ascii=False)
+                   if isinstance(v, (dict, list, tuple)) else v)
+    with open(target / "run.csv", "w", newline="", encoding="utf-8") as fh:
+        w = _csv.DictWriter(fh, fieldnames=list(flat.keys()))
+        w.writeheader()
+        w.writerow({k: ("" if v is None else v) for k, v in flat.items()})
+    say(f"  işaretlendi -> {target.name}: {changed}")
+    return 0
+
+
 def cmd_report(args) -> int:
     from .report import aggregate, plots, tables
     base = Path(args.results) if args.results else results_dir()
@@ -387,6 +445,17 @@ def build_parser() -> argparse.ArgumentParser:
                     help="önce sahte veri üret (gerçek robot gerekmez)")
     sp.add_argument("--seed", type=int, default=7)
 
+    sp = sub.add_parser("mark", help="kaydedilmiş koşuya operatör gözlemi ekle")
+    sp.add_argument("experiment_id", help="koşu kimliği (kısmi eşleşme olur)")
+    sp.add_argument("--collision", dest="collision", action="store_true",
+                    default=None, help="çarpışma OLDU olarak işaretle")
+    sp.add_argument("--no-collision", dest="collision", action="store_false",
+                    help="çarpışma OLMADI olarak işaretle")
+    sp.add_argument("--failed", action="store_true",
+                    help="operatör bu koşuyu başarısız sayıyor")
+    sp.add_argument("--note", default="", help="ek not")
+    sp.add_argument("--results", default=None, help="koşu dizini")
+
     sp = sub.add_parser("menu", help="terminal menüsü (canlı gösterge)")
     sp.add_argument("--environment", "-e", default="")
     sp.add_argument("--use-sim-time", action="store_true")
@@ -416,6 +485,8 @@ def _dispatch(args) -> int:
         return cmd_camera(args)
     if cmd == "battery":
         return cmd_battery(args)
+    if cmd == "mark":
+        return cmd_mark(args)
     if cmd == "report":
         return cmd_report(args)
     if cmd == "menu":

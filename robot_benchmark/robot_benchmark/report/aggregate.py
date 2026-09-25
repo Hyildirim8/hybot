@@ -101,6 +101,23 @@ def summarize_group(runs: list[dict]) -> dict[str, Summary]:
     return {m: summarize(metric_values(runs, m)) for m in NUMERIC_METRICS}
 
 
+# Konumlandirma DOGRULUGU yalnizca hedefe ULASILAN kosularda anlamlidir:
+# iptal edilen bir hedefte "hata" doğruluk degil, robotun nereye kadar
+# gidebildigidir (olcum: bir aborted kosuda 11.8 m). Bu yuzden bu metrikler
+# ayrica succeeded-only olarak da ozetlenir. Basarisiz kosular SILINMEZ;
+# basari oraninda ve tum-kosu ozetinde aynen sayilir.
+ACCURACY_METRICS = ("linear_error_m", "angular_error_deg")
+
+
+def succeeded_runs(runs: list[dict]) -> list[dict]:
+    return [r for r in runs if r["metrics"].get("goal_status") == "succeeded"]
+
+
+def summarize_accuracy(runs: list[dict]) -> dict[str, Summary]:
+    ok = succeeded_runs(runs)
+    return {m: summarize(metric_values(ok, m)) for m in ACCURACY_METRICS}
+
+
 def status_breakdown(runs: list[dict]) -> tuple[float | None, dict[str, int]]:
     """Hedef durumlarına göre başarı oranı. Hedef almayan koşular dışarıda."""
     statuses = [r["metrics"].get("goal_status") for r in runs
@@ -127,6 +144,9 @@ def build_summary(base: Path | None = None) -> dict[str, Any]:
             "goal_status_counts": counts,
             "metrics": {m: s.as_dict() for m, s in summarize_group(group).items()
                         if s.n > 0},
+            "accuracy_succeeded_only": {
+                m: s.as_dict() for m, s in summarize_accuracy(group).items()
+                if s.n > 0},
         }
     # Hedef bazlı (tekrarlanabilirlik için asıl tablo)
     for (kind, env, goal), group in sorted(
@@ -141,6 +161,9 @@ def build_summary(base: Path | None = None) -> dict[str, Any]:
             "goal_status_counts": counts,
             "metrics": {m: s.as_dict() for m, s in summarize_group(group).items()
                         if s.n > 0},
+            "accuracy_succeeded_only": {
+                m: s.as_dict() for m, s in summarize_accuracy(group).items()
+                if s.n > 0},
         }
     return payload
 
@@ -191,6 +214,13 @@ def write_summary(out_dir: Path, base: Path | None = None) -> dict[str, Path]:
                     "ortalama", "medyan", "std", "min", "max",
                     "ci95_alt", "ci95_ust"])
         for blk in payload["by_goal"].values():
+            for m, s in blk.get("accuracy_succeeded_only", {}).items():
+                w.writerow([blk["kind"], blk["environment"], blk["goal_name"],
+                            LABELS_TR.get(m, m) + " (yalnizca basarili)",
+                            UNITS.get(m, ""), s["n"],
+                            _c(s["mean"]), _c(s["median"]), _c(s["std"]),
+                            _c(s["minimum"]), _c(s["maximum"]),
+                            _c(s["ci95_low"]), _c(s["ci95_high"])])
             for m, s in blk["metrics"].items():
                 w.writerow([blk["kind"], blk["environment"], blk["goal_name"],
                             LABELS_TR.get(m, m), UNITS.get(m, ""), s["n"],
