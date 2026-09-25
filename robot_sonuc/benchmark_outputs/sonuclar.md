@@ -1,6 +1,6 @@
 # Robot Performans Testi Sonuçları
 
-- Toplam koşu sayısı: **12**
+- Toplam koşu sayısı: **18**
 - Yarıda kesilen koşu: **0** (veriler korundu, sonuçlara dahil)
 - Sahte/mock koşu: **0** (gerçek robot ölçümü değildir)
 
@@ -31,6 +31,14 @@
 | Bilinen harita alanı | m² | 1 | 527.450 | 527.450 | N/A | 527.450 | 527.450 | N/A |
 | Dolu hücre sayısı | - | 1 | 20170.000 | 20170.000 | N/A | 20170.000 | 20170.000 | N/A |
 | Haritalama süresi | s | 1 | 40.784 | 40.784 | N/A | 40.784 | 40.784 | N/A |
+
+
+## Deney: mecanum
+
+- Koşu sayısı: **6**
+- Hedefe ulaşma oranı: **N/A**
+
+_Bu deney için sayısal metrik ölçülemedi._
 
 
 ## Deney: repeatability
@@ -91,6 +99,48 @@
 | Bilinen harita alanı | m² | 1 | 527.450 | 527.450 | N/A | 527.450 | 527.450 | N/A |
 | Dolu hücre sayısı | - | 1 | 20170.000 | 20170.000 | N/A | 20170.000 | 20170.000 | N/A |
 | Haritalama süresi | s | 1 | 40.784 | 40.784 | N/A | 40.784 | 40.784 | N/A |
+
+
+### mecanum — ortam: lab-gercek — hedef: yon-1-ileri
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
+
+
+### mecanum — ortam: lab-gercek — hedef: yon-2-geri
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
+
+
+### mecanum — ortam: lab-gercek — hedef: yon-3-sol
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
+
+
+### mecanum — ortam: lab-gercek — hedef: yon-4-sag
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
+
+
+### mecanum — ortam: lab-gercek — hedef: yon-5-ccw
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
+
+
+### mecanum — ortam: lab-gercek — hedef: yon-6-cw
+
+- Tekrar sayısı: **1**
+- Başarı oranı: **N/A**
+
 
 
 ### repeatability — ortam: lab-gercek — hedef: rota-A-B

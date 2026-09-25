@@ -1,5 +1,5 @@
 {
-  "run_count": 12,
+  "run_count": 18,
   "partial_run_count": 0,
   "mock_run_count": 0,
   "kinds": {
@@ -105,6 +105,13 @@
           "ci95_halfwidth": null
         }
       },
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum": {
+      "run_count": 6,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
       "accuracy_succeeded_only": {}
     },
     "repeatability": {
@@ -438,6 +445,66 @@
           "ci95_halfwidth": null
         }
       },
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum|lab-gercek|yon-1-ileri": {
+      "kind": "mecanum",
+      "environment": "lab-gercek",
+      "goal_name": "yon-1-ileri",
+      "run_count": 1,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum|lab-gercek|yon-2-geri": {
+      "kind": "mecanum",
+      "environment": "lab-gercek",
+      "goal_name": "yon-2-geri",
+      "run_count": 1,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum|lab-gercek|yon-3-sol": {
+      "kind": "mecanum",
+      "environment": "lab-gercek",
+      "goal_name": "yon-3-sol",
+      "run_count": 1,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum|lab-gercek|yon-4-sag": {
+      "kind": "mecanum",
+      "environment": "lab-gercek",
+      "goal_name": "yon-4-sag",
+      "run_count": 1,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum|lab-gercek|yon-5-ccw": {
+      "kind": "mecanum",
+      "environment": "lab-gercek",
+      "goal_name": "yon-5-ccw",
+      "run_count": 1,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "mecanum|lab-gercek|yon-6-cw": {
+      "kind": "mecanum",
+      "environment": "lab-gercek",
+      "goal_name": "yon-6-cw",
+      "run_count": 1,
+      "goal_success_rate": null,
+      "goal_status_counts": {},
+      "metrics": {},
       "accuracy_succeeded_only": {}
     },
     "repeatability|lab-gercek|rota-A-B": {

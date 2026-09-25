@@ -114,12 +114,37 @@ class MotionGuard:
         return False
 
 
+def wheels_still_for(monitor: BenchmarkMonitor, seconds: float,
+                     timeout_s: float) -> bool:
+    """Tekerlekler KESINTISIZ `seconds` boyunca durdu mu?
+
+    Tek bir anlik sifir okumasina guvenmek olcumu bozuyordu: tekerlek geri
+    beslemesi hareket ortasinda bir an sifir okuyunca "hareket bitti" saniliyor,
+    bir sonraki yon dilimi hala suren hareketi yakaliyor ve butun sira bir dilim
+    kayiyordu (olcum: 0.4 s'lik pencerede 56.8 cm, yani 1.4 m/s — fiziksel
+    tavan ~0.75 m/s). Bu yuzden duruş DEBOUNCE ediliyor.
+    """
+    end = monitor.now_s() + timeout_s
+    still_since: float | None = None
+    while monitor.now_s() < end:
+        if monitor.wheels_still():
+            if still_since is None:
+                still_since = monitor.now_s()
+            elif monitor.now_s() - still_since >= seconds:
+                return True
+        else:
+            still_since = None
+        monitor.spin_for(0.05)
+    return False
+
+
 def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
                       settle_s: float = 1.0,
                       on_status: Callable[[str], None] | None = None,
                       wait_for_motion_s: float = 60.0,
                       motion: MotionGuard | None = None,
                       speed: float = 0.12, duration_s: float = 1.5,
+                      still_debounce_s: float = 1.5,
                       ) -> dict[str, Any]:
     """Bir yön için başlangıç/bitiş pozundan mesafe ve sapma ölçer.
 
@@ -134,8 +159,11 @@ def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
     (sx, sy, sw), safe_deg = DIRECTION_CMD[direction_key]
     clearance = sector_clearance(monitor, safe_deg)
 
-    # Başlangıç pozu — robot GERÇEKTEN dururken alınmalı.
-    monitor.wait_until(monitor.wheels_still, settle_s + 3.0)
+    # Başlangıç pozu — robot GERÇEKTEN ve KESINTISIZ dururken alınmalı.
+    if not wheels_still_for(monitor, still_debounce_s, 20.0):
+        say(f"[{direction_key}] robot durmuyor, ölçüm atlandı "
+            f"(önceki hareket bitmemiş olabilir).")
+        return _na(direction_key, clearance, "durus_yok")
     monitor.spin_for(settle_s)
     p0 = monitor.odom_pose
     if p0 is None:
@@ -143,6 +171,7 @@ def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
         return _na(direction_key, clearance, "odometri_yok")
 
     moved_ok = True
+    motion_window_s: float | None = None
     if motion is None:
         say(f"[{direction_key}] Hareketi ŞİMDİ joystick ile yapın "
             f"(en fazla {wait_for_motion_s:.0f} s bekliyorum)…")
@@ -151,10 +180,18 @@ def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
         if not started:
             say("Hareket algılanmadı.")
             return _na(direction_key, clearance, "hareket_yok")
-        store.event("motion_started", direction=direction_key)
-        # Hareket bitene kadar bekle (tekerlekler tekrar dursun)
-        monitor.wait_until(monitor.wheels_still, wait_for_motion_s)
-        store.event("motion_stopped", direction=direction_key)
+        t_start = monitor.now_s()
+        store.event("motion_started", direction=direction_key, t_ros_s=t_start)
+        # Hareket bitene kadar bekle: tekerlekler KESINTISIZ durmali, yoksa
+        # hareket ortasindaki anlik sifir okumasi pencereyi erken kapatiyor.
+        if not wheels_still_for(monitor, still_debounce_s, wait_for_motion_s):
+            say(f"[{direction_key}] hareket {wait_for_motion_s:.0f} s içinde "
+                f"bitmedi.")
+            return _na(direction_key, clearance, "hareket_bitmedi")
+        motion_window_s = monitor.now_s() - t_start
+        store.event("motion_stopped", direction=direction_key,
+                    t_ros_s=monitor.now_s(),
+                    motion_window_s=round(motion_window_s, 2))
     else:
         vx, vy, wz = sx * speed, sy * speed, sw * (speed / 0.12 * 0.4)
         wheel = N.max_wheel_rad_s(vx, vy, wz)
@@ -173,7 +210,7 @@ def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
                     vx=vx, vy=vy, wz=wz, duration_s=duration_s)
         moved_ok = motion.drive(vx, vy, wz, duration_s)
 
-    monitor.wait_until(monitor.wheels_still, 5.0)
+    wheels_still_for(monitor, still_debounce_s, 10.0)
     monitor.spin_for(settle_s)
     p1 = monitor.odom_pose
     if p1 is None:
@@ -189,6 +226,15 @@ def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
     expect = next(d.expect for d in N.MECANUM_DIRECTIONS if d.key == direction_key)
     primary, lateral_dev, verdict = _classify(expect, fwd, left, yaw_deg)
 
+    # Fiziksel makuliyet: olculen yer degistirme, hareket penceresinde
+    # ulasilabilir hizin ustundeyse pencere gercek hareketle ORTUSMUYOR
+    # demektir (dilim kaymasi). Boyle bir olcumu "yon dogru/ters" diye
+    # raporlamak yaniltici olur.
+    max_lin_mps = N.FIRMWARE_MAX_WHEEL_RAD_S * N.WHEEL_RADIUS_M  # 0.75 m/s
+    window = max(motion_window_s or 0.0, 1e-6)
+    if motion_window_s and dist / window > max_lin_mps * 1.15:
+        verdict = "OLCUM_TUTARSIZ"
+
     say(f"[{direction_key}] ileri={fwd*100:+.1f} cm  sol={left*100:+.1f} cm  "
         f"dönme={yaw_deg:+.1f}°  -> {verdict}")
     return {
@@ -200,6 +246,7 @@ def measure_direction(monitor: BenchmarkMonitor, store, direction_key: str,
         "angular_change_deg": yaw_deg,
         "primary_component_m_or_deg": primary,
         "lateral_deviation_m_or_deg": lateral_dev,
+        "motion_window_s": motion_window_s,
         "direction_verdict": verdict,
         "auto_motion_completed": moved_ok if motion is not None else None,
         "skip_reason": None,
