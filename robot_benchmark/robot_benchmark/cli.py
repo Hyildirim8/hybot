@@ -394,7 +394,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    try:
+        return _dispatch(build_parser().parse_args(argv))
+    except KeyboardInterrupt:
+        # Veri RunStore tarafından zaten partial olarak kaydedildi.
+        say("\n  Kesildi. O ana kadarki veri kaydedildi (partial=true).")
+        return 130
+
+
+def _dispatch(args) -> int:
     cmd = args.command
     if cmd in ("navigation", "obstacle", "repeatability"):
         return cmd_goal_based(args, cmd)

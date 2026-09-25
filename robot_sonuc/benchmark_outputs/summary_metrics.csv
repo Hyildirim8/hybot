@@ -1,0 +1,51 @@
+deney,ortam,hedef,metrik,birim,n,ortalama,medyan,std,min,max,ci95_alt,ci95_ust
+camera,lab-gercek,kamera-60s,Kamera FPS,FPS,1,14.995966,14.995966,,14.995966,14.995966,,
+camera,lab-gercek,kamera-60s,Kareler arası süre,s,1,0.066643,0.066643,,0.066643,0.066643,,
+camera,lab-gercek,kamera-60s,Toplam kesinti,s,1,0.0,0.0,,0.0,0.0,,
+camera,lab-gercek,kamera-60s,Alınan kare sayısı,,1,900.0,900.0,,900.0,900.0,,
+mapping,lab-gercek,harita-baslangic,Harita kapsama oranı,oran,1,0.372158,0.372158,,0.372158,0.372158,,
+mapping,lab-gercek,harita-baslangic,Bilinen harita alanı,m²,1,527.450016,527.450016,,527.450016,527.450016,,
+mapping,lab-gercek,harita-baslangic,Dolu hücre sayısı,,1,20170.0,20170.0,,20170.0,20170.0,,
+mapping,lab-gercek,harita-baslangic,Haritalama süresi,s,1,40.784299,40.784299,,40.784299,40.784299,,
+repeatability,lab-gercek,rota-A-B,Hedefe ulaşma süresi,s,8,70.340905,65.705879,35.61067,19.600328,130.502729,40.564909,100.116901
+repeatability,lab-gercek,rota-A-B,Planlanan yol uzunluğu,m,8,9.477166,7.895342,4.981169,4.574905,18.799141,5.312143,13.642189
+repeatability,lab-gercek,rota-A-B,Gerçek gidilen mesafe,m,8,12.218102,10.237429,5.775727,5.375747,23.700517,7.388706,17.047498
+repeatability,lab-gercek,rota-A-B,Ortalama hız,m/s,8,0.196725,0.222146,0.072774,0.066148,0.274268,0.135875,0.257575
+repeatability,lab-gercek,rota-A-B,Doğrusal konum hatası,m,8,0.17148,0.164212,0.032233,0.136045,0.222138,0.144528,0.198432
+repeatability,lab-gercek,rota-A-B,Açısal konum hatası,°,8,11.004054,11.218871,8.541942,1.030678,22.013626,3.861677,18.146431
+repeatability,lab-gercek,rota-A-B,Yeniden planlama sayısı,,8,44.0,43.0,18.516402,14.0,69.0,28.517441,59.482559
+repeatability,lab-gercek,rota-A-B,Alınan plan mesajı,,8,53.5,51.0,26.752837,15.0,98.0,31.130515,75.869485
+repeatability,lab-gercek,rota-A-B,İlk yeniden planlama süresi,s,8,1.462414,1.312611,0.463086,1.199335,2.603619,1.075203,1.849626
+repeatability,lab-gercek,rota-A-B,Engel algılama olayı,,8,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+repeatability,lab-gercek,rota-A-B,Nav2 recovery sayısı,,8,3.125,1.5,3.870677,0.0,10.0,-0.111481,6.361481
+repeatability,lab-gercek,rota-A-B,BT plan hesaplama,,8,105.125,100.0,53.45609,28.0,194.0,60.427489,149.822511
+repeatability,lab-gercek,rota-A-B,BT costmap temizleme,,8,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+repeatability,lab-gercek,rota-A-B,BT geri çekilme,,8,0.5,0.0,0.755929,0.0,2.0,-0.132073,1.132073
+repeatability,lab-gercek,rota-A-B,Harita kapsama oranı,oran,8,0.364594,0.364066,0.003779,0.360296,0.370435,0.361435,0.367754
+repeatability,lab-gercek,rota-A-B,Bilinen harita alanı,m²,8,523.386578,522.541266,2.181285,521.220016,526.165016,521.562689,525.210468
+repeatability,lab-gercek,rota-A-B,Dolu hücre sayısı,,8,20602.625,20562.0,576.073641,19960.0,21254.0,20120.938854,21084.311146
+camera,(tümü),(tümü),Kamera FPS,FPS,1,14.995966,14.995966,,14.995966,14.995966,,
+camera,(tümü),(tümü),Kareler arası süre,s,1,0.066643,0.066643,,0.066643,0.066643,,
+camera,(tümü),(tümü),Toplam kesinti,s,1,0.0,0.0,,0.0,0.0,,
+camera,(tümü),(tümü),Alınan kare sayısı,,1,900.0,900.0,,900.0,900.0,,
+mapping,(tümü),(tümü),Harita kapsama oranı,oran,1,0.372158,0.372158,,0.372158,0.372158,,
+mapping,(tümü),(tümü),Bilinen harita alanı,m²,1,527.450016,527.450016,,527.450016,527.450016,,
+mapping,(tümü),(tümü),Dolu hücre sayısı,,1,20170.0,20170.0,,20170.0,20170.0,,
+mapping,(tümü),(tümü),Haritalama süresi,s,1,40.784299,40.784299,,40.784299,40.784299,,
+repeatability,(tümü),(tümü),Hedefe ulaşma süresi,s,8,70.340905,65.705879,35.61067,19.600328,130.502729,40.564909,100.116901
+repeatability,(tümü),(tümü),Planlanan yol uzunluğu,m,8,9.477166,7.895342,4.981169,4.574905,18.799141,5.312143,13.642189
+repeatability,(tümü),(tümü),Gerçek gidilen mesafe,m,8,12.218102,10.237429,5.775727,5.375747,23.700517,7.388706,17.047498
+repeatability,(tümü),(tümü),Ortalama hız,m/s,8,0.196725,0.222146,0.072774,0.066148,0.274268,0.135875,0.257575
+repeatability,(tümü),(tümü),Doğrusal konum hatası,m,8,0.17148,0.164212,0.032233,0.136045,0.222138,0.144528,0.198432
+repeatability,(tümü),(tümü),Açısal konum hatası,°,8,11.004054,11.218871,8.541942,1.030678,22.013626,3.861677,18.146431
+repeatability,(tümü),(tümü),Yeniden planlama sayısı,,8,44.0,43.0,18.516402,14.0,69.0,28.517441,59.482559
+repeatability,(tümü),(tümü),Alınan plan mesajı,,8,53.5,51.0,26.752837,15.0,98.0,31.130515,75.869485
+repeatability,(tümü),(tümü),İlk yeniden planlama süresi,s,8,1.462414,1.312611,0.463086,1.199335,2.603619,1.075203,1.849626
+repeatability,(tümü),(tümü),Engel algılama olayı,,8,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+repeatability,(tümü),(tümü),Nav2 recovery sayısı,,8,3.125,1.5,3.870677,0.0,10.0,-0.111481,6.361481
+repeatability,(tümü),(tümü),BT plan hesaplama,,8,105.125,100.0,53.45609,28.0,194.0,60.427489,149.822511
+repeatability,(tümü),(tümü),BT costmap temizleme,,8,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+repeatability,(tümü),(tümü),BT geri çekilme,,8,0.5,0.0,0.755929,0.0,2.0,-0.132073,1.132073
+repeatability,(tümü),(tümü),Harita kapsama oranı,oran,8,0.364594,0.364066,0.003779,0.360296,0.370435,0.361435,0.367754
+repeatability,(tümü),(tümü),Bilinen harita alanı,m²,8,523.386578,522.541266,2.181285,521.220016,526.165016,521.562689,525.210468
+repeatability,(tümü),(tümü),Dolu hücre sayısı,,8,20602.625,20562.0,576.073641,19960.0,21254.0,20120.938854,21084.311146

@@ -68,6 +68,10 @@ class GoalRecord:
     recoveries: int | None = None
     distance_remaining_m: float | None = None
     feedback_count: int = 0
+    # Ilk goruldugunde ZATEN sonuclanmis hedef: /navigate_to_pose/_action/status
+    # TRANSIENT_LOCAL oldugu icin gec abone olan dugum, onceki kosularin bitmis
+    # hedeflerini de alir. Bunlar "yeni hedef" sayilmamalidir.
+    stale: bool = False
 
     @property
     def duration_s(self) -> float | None:
@@ -130,7 +134,8 @@ class Nav2GoalTracker:
             name = STATUS_NAME.get(st.status, f"code_{st.status}")
             rec = self.goals.get(uid)
             if rec is None:
-                rec = GoalRecord(uuid=uid, first_seen_s=now, status=name)
+                rec = GoalRecord(uuid=uid, first_seen_s=now, status=name,
+                                 stale=(name in TERMINAL))
                 self.goals[uid] = rec
                 self.order.append(uid)
             if name == "accepted" and rec.accepted_s is None:
@@ -173,16 +178,29 @@ class Nav2GoalTracker:
         return None
 
     def wait_for_new_goal(self, timeout_s: float) -> GoalRecord | None:
-        """Yeni bir hedef kabul edilene kadar bekler (operatör RViz'den verir)."""
-        known = set(self.order)
-        ok = self.node.wait_until(
-            lambda: any(u not in known for u in self.order), timeout_s)
-        if not ok:
+        """Yeni bir hedef kabul edilene kadar bekler (operatör RViz'den verir).
+
+        Latched durum topic'inden gelen ESKI hedefler atlanir:
+        /navigate_to_pose/_action/status TRANSIENT_LOCAL oldugu icin gec abone
+        olan dugum onceki kosularin bitmis hedeflerini de alir. Ilk
+        goruldugunde zaten sonuclanmis (stale) olanlar "yeni" sayilmaz; yoksa
+        dugum acilir acilmaz 0 saniyelik sahte bir 'aborted' kosu kaydediliyor.
+        """
+        # Latched durumu sindir: baseline bundan sonra olussun.
+        self.node.spin_for(0.8)
+        baseline = set(self.order)
+
+        def fresh_uid() -> str | None:
+            for uid in self.order:
+                if uid in baseline or self.goals[uid].stale:
+                    continue
+                return uid
             return None
-        for uid in self.order:
-            if uid not in known:
-                return self.goals[uid]
-        return None
+
+        if not self.node.wait_until(lambda: fresh_uid() is not None, timeout_s):
+            return None
+        uid = fresh_uid()
+        return self.goals[uid] if uid else None
 
     def wait_for_terminal(self, rec: GoalRecord, timeout_s: float) -> bool:
         """Verilen hedef sonuçlanana kadar bekler."""

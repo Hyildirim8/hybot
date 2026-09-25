@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (
     QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy,
@@ -130,7 +131,8 @@ class BenchmarkMonitor(Node):
         self.replan_count = 0                # içeriği DEĞİŞEN plan sayısı
         self.first_plan_s: float | None = None
         self.first_replan_s: float | None = None
-        self.planned_length_m: float | None = None
+        self.planned_length_m: float | None = None      # SON planin uzunlugu
+        self.first_plan_length_m: float | None = None   # ILK planin uzunlugu
         self._plan_fingerprint: tuple | None = None
         if "plan" in want:
             self.create_subscription(Path, N.TOPIC_GLOBAL_PLAN,
@@ -220,12 +222,31 @@ class BenchmarkMonitor(Node):
                       N.FRAME_MAP,
                       tr.header.stamp.sec + tr.header.stamp.nanosec * 1e-9)
 
+    def reset_plan_stats(self) -> None:
+        """Yeni hedef icin plan sayaclarini sifirla (kosular birbirine karismasin)."""
+        self.plan_count = 0
+        self.replan_count = 0
+        self.first_plan_s = None
+        self.first_replan_s = None
+        self.first_plan_length_m = None
+        self.planned_length_m = None
+        self._plan_fingerprint = None
+
     def spin_for(self, seconds: float, hz: float = 50.0) -> None:
-        """Belirtilen süre boyunca ROS saatine göre döner."""
+        """Belirtilen süre boyunca ROS saatine göre döner.
+
+        Dışarıdan kapatma (SIGINT/SIGTERM -> ExternalShutdownException)
+        KeyboardInterrupt'a çevrilir; böylece RunStore bağlam yöneticisi
+        devreye girip o ana kadarki veriyi partial olarak kaydeder ve
+        kullanıcıya yığın izi yerine temiz bir mesaj gösterilir.
+        """
         end = self.now_s() + seconds
         period = 1.0 / hz
         while self.now_s() < end:
-            rclpy.spin_once(self, timeout_sec=period)
+            try:
+                rclpy.spin_once(self, timeout_sec=period)
+            except ExternalShutdownException as exc:
+                raise KeyboardInterrupt("ROS bağlamı dışarıdan kapatıldı") from exc
 
     def wait_until(self, predicate: Callable[[], bool], timeout_s: float,
                    hz: float = 50.0) -> bool:
@@ -235,7 +256,10 @@ class BenchmarkMonitor(Node):
         while self.now_s() < end:
             if predicate():
                 return True
-            rclpy.spin_once(self, timeout_sec=period)
+            try:
+                rclpy.spin_once(self, timeout_sec=period)
+            except ExternalShutdownException as exc:
+                raise KeyboardInterrupt("ROS bağlamı dışarıdan kapatıldı") from exc
         return predicate()
 
     # ── geri çağrımlar ────────────────────────────────────────────────────
@@ -279,6 +303,12 @@ class BenchmarkMonitor(Node):
         for a, b in zip(pts, pts[1:]):
             total += math.hypot(b[0] - a[0], b[1] - a[1])
         self.planned_length_m = total if pts else None
+        if self.first_plan_length_m is None and pts:
+            # Hedefe ulasma yaklastikca /plan KISALIR; "planlanan yol uzunlugu"
+            # olarak son plani almak metrigi anlamsiz kilar (olcum: gidilen
+            # 18.9 m iken son plan 0.17 m). Bu yuzden hedef kabul edildikten
+            # sonraki ILK tam plan saklanir.
+            self.first_plan_length_m = total
         # Parmak izi: uç noktalar + nokta sayısı + uzunluk. Aynı planın
         # tekrar yayınlanmasını "yeniden planlama" saymamak için.
         fp = (len(pts), round(total, 3),

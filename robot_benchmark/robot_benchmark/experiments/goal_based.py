@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
+from .. import ros_names as N
 from ..monitors import BenchmarkMonitor
 from ..nav2_tracker import Nav2GoalTracker
-from ..stats import path_length
+from ..stats import yaw_from_quaternion
 from .common import (PoseTrack, avg_speed, bt_replan_stats, goal_error,
                      map_metrics)
 
@@ -49,12 +50,18 @@ def run_goal_run(monitor: BenchmarkMonitor, tracker: Nav2GoalTracker, store,
             "linear_error_m": None, "angular_error_deg": None,
         }
 
+    # /goal_pose tek seferlik yayınlanır ve action durumu ondan ÖNCE gelebilir;
+    # geri çağrımın işlenmesi için kısa bir tur at. Yine gelmezse aşağıda
+    # global plandan türetilir.
+    monitor.spin_for(0.6)
+    # Plan sayaclarini bu kosu icin sifirla ve ILK tam plani bekle.
+    monitor.reset_plan_stats()
+    monitor.wait_until(lambda: monitor.first_plan_length_m is not None, 10.0)
+
     # Başlangıç durumu
     track = PoseTrack()
     track.update(monitor, store)
     start_ros_s = monitor.now_s()
-    plan_at_start = monitor.plan_count
-    replan_at_start = monitor.replan_count
     obstacles_at_start = len(monitor.obstacle_events)
     bt_at_start = len(monitor.bt_events)
     goal_pose = tracker.last_goal_pose
@@ -76,13 +83,29 @@ def run_goal_run(monitor: BenchmarkMonitor, tracker: Nav2GoalTracker, store,
     track.update(monitor, store)
 
     # ── metrikler ─────────────────────────────────────────────────────────
-    planned = monitor.planned_length_m
-    if monitor.global_plan is not None and monitor.global_plan.poses:
-        planned = path_length([(p.pose.position.x, p.pose.position.y)
-                               for p in monitor.global_plan.poses])
+    # Hedef kabul edildikten SONRAKI ILK plan = gercek planlanan yol.
+    planned = monitor.first_plan_length_m
     duration = goal.duration_s
     if duration is None:
         duration = end_ros_s - start_ros_s if end_ros_s > start_ros_s else None
+    # Hedef pozu /goal_pose'tan gelmediyse global planın SON noktasından türet:
+    # planner hedefe kadar yol üretir, dolayısıyla plan.poses[-1] hedeftir ve
+    # map çerçevesindedir. Böylece konum hatası ölçülemeden kalmaz.
+    if goal_pose is None and monitor.global_plan is not None and monitor.global_plan.poses:
+        last = monitor.global_plan.poses[-1]
+        q = last.pose.orientation
+        goal_pose = {
+            "t_s": start_ros_s,
+            "frame": monitor.global_plan.header.frame_id or N.FRAME_MAP,
+            "x": last.pose.position.x,
+            "y": last.pose.position.y,
+            "yaw_rad": yaw_from_quaternion(q.x, q.y, q.z, q.w),
+            "source": "global_plan_last_pose",
+        }
+        store.event("goal_pose_derived", **goal_pose)
+    elif goal_pose is not None:
+        goal_pose = dict(goal_pose, source="goal_pose_topic")
+
     lin_err, ang_err = goal_error(goal_pose, track.last_map)
     bt = bt_replan_stats(monitor.bt_events[bt_at_start:])
 
@@ -95,6 +118,7 @@ def run_goal_run(monitor: BenchmarkMonitor, tracker: Nav2GoalTracker, store,
         "goal_pose_y": goal_pose["y"] if goal_pose else None,
         "goal_pose_yaw_rad": goal_pose["yaw_rad"] if goal_pose else None,
         "goal_frame": goal_pose["frame"] if goal_pose else None,
+        "goal_pose_source": goal_pose.get("source") if goal_pose else None,
         "start_ros_s": start_ros_s,
         "end_ros_s": end_ros_s,
         "duration_s": duration,
@@ -107,8 +131,9 @@ def run_goal_run(monitor: BenchmarkMonitor, tracker: Nav2GoalTracker, store,
             track.travelled_m if track.samples > 1 else None, duration),
         "linear_error_m": lin_err,
         "angular_error_deg": ang_err,
-        "plan_msgs": monitor.plan_count - plan_at_start,
-        "replan_count": monitor.replan_count - replan_at_start,
+        "planned_path_len_final_m": monitor.planned_length_m,
+        "plan_msgs": monitor.plan_count,
+        "replan_count": monitor.replan_count,
         "first_replan_s": (monitor.first_replan_s - start_ros_s
                            if monitor.first_replan_s
                            and monitor.first_replan_s >= start_ros_s else None),
