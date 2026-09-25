@@ -1,6 +1,6 @@
 # Robot Performans Testi Sonuçları
 
-- Toplam koşu sayısı: **18**
+- Toplam koşu sayısı: **20**
 - Yarıda kesilen koşu: **0** (veriler korundu, sonuçlara dahil)
 - Sahte/mock koşu: **0** (gerçek robot ölçümü değildir)
 
@@ -39,6 +39,33 @@
 - Hedefe ulaşma oranı: **N/A**
 
 _Bu deney için sayısal metrik ölçülemedi._
+
+
+## Deney: obstacle
+
+- Koşu sayısı: **2**
+- Hedefe ulaşma oranı: **%0.0**
+- Durum dağılımı: İptal (abort): 2
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Hedefe ulaşma süresi | s | 2 | 13.286 | 13.286 | 10.016 | 6.203 | 20.368 | [-76.706; 103.277] |
+| Planlanan yol uzunluğu | m | 2 | 5.297 | 5.297 | 0.639 | 4.845 | 5.749 | [-0.444; 11.037] |
+| Gerçek gidilen mesafe | m | 2 | 1.269 | 1.269 | 1.795 | 0.000 | 2.539 | [-14.858; 17.396] |
+| Ortalama hız | m/s | 2 | 0.062 | 0.062 | 0.088 | 0.000 | 0.125 | [-0.729; 0.854] |
+| Doğrusal konum hatası | m | 2 | 3.530 | 3.530 | 1.627 | 2.380 | 4.681 | [-11.084; 18.145] |
+| Açısal konum hatası | ° | 2 | 119.810 | 119.810 | 0.613 | 119.377 | 120.243 | [114.304; 125.315] |
+| Yeniden planlama sayısı | - | 2 | 5.000 | 5.000 | 7.071 | 0.000 | 10.000 | [-58.530; 68.530] |
+| Alınan plan mesajı | - | 2 | 9.500 | 9.500 | 7.778 | 4.000 | 15.000 | [-60.383; 79.383] |
+| İlk yeniden planlama süresi | s | 1 | 6.395 | 6.395 | N/A | 6.395 | 6.395 | N/A |
+| Engel algılama olayı | - | 2 | 10.500 | 10.500 | 14.849 | 0.000 | 21.000 | [-122.913; 143.913] |
+| Nav2 recovery sayısı | - | 2 | 2.000 | 2.000 | 2.828 | 0.000 | 4.000 | [-23.412; 27.412] |
+| BT plan hesaplama | - | 2 | 17.000 | 17.000 | 15.556 | 6.000 | 28.000 | [-122.766; 156.766] |
+| BT costmap temizleme | - | 2 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | [0.000; 0.000] |
+| BT geri çekilme | - | 2 | 0.500 | 0.500 | 0.707 | 0.000 | 1.000 | [-5.853; 6.853] |
+| Harita kapsama oranı | oran | 2 | 0.375 | 0.375 | 0.000 | 0.375 | 0.375 | [0.375; 0.375] |
+| Bilinen harita alanı | m² | 2 | 534.948 | 534.948 | 0.004 | 534.945 | 534.950 | [534.916; 534.979] |
+| Dolu hücre sayısı | - | 2 | 22257.000 | 22257.000 | 0.000 | 22257.000 | 22257.000 | [22257.000; 22257.000] |
 
 
 ## Deney: repeatability
@@ -141,6 +168,34 @@ _Bu deney için sayısal metrik ölçülemedi._
 - Tekrar sayısı: **1**
 - Başarı oranı: **N/A**
 
+
+
+### obstacle — ortam: lab-gercek — hedef: engel-1
+
+- Tekrar sayısı: **2**
+- Başarı oranı: **%0.0**
+
+**Tüm koşular (başarısızlar dahil).**
+
+| Metrik | Birim | n | Ortalama | Medyan | Std | Min | Maks | %95 GA |
+|---|---|---|---|---|---|---|---|---|
+| Hedefe ulaşma süresi | s | 2 | 13.286 | 13.286 | 10.016 | 6.203 | 20.368 | [-76.706; 103.277] |
+| Planlanan yol uzunluğu | m | 2 | 5.297 | 5.297 | 0.639 | 4.845 | 5.749 | [-0.444; 11.037] |
+| Gerçek gidilen mesafe | m | 2 | 1.269 | 1.269 | 1.795 | 0.000 | 2.539 | [-14.858; 17.396] |
+| Ortalama hız | m/s | 2 | 0.062 | 0.062 | 0.088 | 0.000 | 0.125 | [-0.729; 0.854] |
+| Doğrusal konum hatası | m | 2 | 3.530 | 3.530 | 1.627 | 2.380 | 4.681 | [-11.084; 18.145] |
+| Açısal konum hatası | ° | 2 | 119.810 | 119.810 | 0.613 | 119.377 | 120.243 | [114.304; 125.315] |
+| Yeniden planlama sayısı | - | 2 | 5.000 | 5.000 | 7.071 | 0.000 | 10.000 | [-58.530; 68.530] |
+| Alınan plan mesajı | - | 2 | 9.500 | 9.500 | 7.778 | 4.000 | 15.000 | [-60.383; 79.383] |
+| İlk yeniden planlama süresi | s | 1 | 6.395 | 6.395 | N/A | 6.395 | 6.395 | N/A |
+| Engel algılama olayı | - | 2 | 10.500 | 10.500 | 14.849 | 0.000 | 21.000 | [-122.913; 143.913] |
+| Nav2 recovery sayısı | - | 2 | 2.000 | 2.000 | 2.828 | 0.000 | 4.000 | [-23.412; 27.412] |
+| BT plan hesaplama | - | 2 | 17.000 | 17.000 | 15.556 | 6.000 | 28.000 | [-122.766; 156.766] |
+| BT costmap temizleme | - | 2 | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | [0.000; 0.000] |
+| BT geri çekilme | - | 2 | 0.500 | 0.500 | 0.707 | 0.000 | 1.000 | [-5.853; 6.853] |
+| Harita kapsama oranı | oran | 2 | 0.375 | 0.375 | 0.000 | 0.375 | 0.375 | [0.375; 0.375] |
+| Bilinen harita alanı | m² | 2 | 534.948 | 534.948 | 0.004 | 534.945 | 534.950 | [534.916; 534.979] |
+| Dolu hücre sayısı | - | 2 | 22257.000 | 22257.000 | 0.000 | 22257.000 | 22257.000 | [22257.000; 22257.000] |
 
 
 ### repeatability — ortam: lab-gercek — hedef: rota-A-B

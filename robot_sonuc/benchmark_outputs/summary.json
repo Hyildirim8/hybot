@@ -1,5 +1,5 @@
 {
-  "run_count": 18,
+  "run_count": 20,
   "partial_run_count": 0,
   "mock_run_count": 0,
   "kinds": {
@@ -112,6 +112,203 @@
       "goal_success_rate": null,
       "goal_status_counts": {},
       "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "obstacle": {
+      "run_count": 2,
+      "goal_success_rate": 0.0,
+      "goal_status_counts": {
+        "aborted": 2
+      },
+      "metrics": {
+        "duration_s": {
+          "n": 2,
+          "mean": 13.285572171211243,
+          "median": 13.285572171211243,
+          "std": 10.016279301975713,
+          "minimum": 6.202993154525757,
+          "maximum": 20.36815118789673,
+          "ci95_low": -76.70567681479453,
+          "ci95_high": 103.27682115721701,
+          "ci95_halfwidth": 89.99124898600577
+        },
+        "planned_path_len_m": {
+          "n": 2,
+          "mean": 5.296800016243464,
+          "median": 5.296800016243464,
+          "std": 0.6389548041180042,
+          "minimum": 4.844990741379901,
+          "maximum": 5.748609291107027,
+          "ci95_low": -0.44388863017296654,
+          "ci95_high": 11.037488662659893,
+          "ci95_halfwidth": 5.74068864641643
+        },
+        "actual_path_len_m": {
+          "n": 2,
+          "mean": 1.2692591681992038,
+          "median": 1.2692591681992038,
+          "std": 1.7950035298337075,
+          "minimum": 0.0,
+          "maximum": 2.5385183363984076,
+          "ci95_low": -14.85794782293988,
+          "ci95_high": 17.39646615933829,
+          "ci95_halfwidth": 16.127206991139083
+        },
+        "avg_speed_mps": {
+          "n": 2,
+          "mean": 0.06231587523532473,
+          "median": 0.06231587523532473,
+          "std": 0.08812795590894593,
+          "minimum": 0.0,
+          "maximum": 0.12463175047064946,
+          "ci95_low": -0.7294696355047112,
+          "ci95_high": 0.8541013859753608,
+          "ci95_halfwidth": 0.791785510740036
+        },
+        "linear_error_m": {
+          "n": 2,
+          "mean": 3.530499485055832,
+          "median": 3.530499485055832,
+          "std": 1.6266455417234966,
+          "minimum": 2.3802873919162826,
+          "maximum": 4.680711578195382,
+          "ci95_low": -11.084095370375282,
+          "ci95_high": 18.145094340486946,
+          "ci95_halfwidth": 14.614594855431115
+        },
+        "angular_error_deg": {
+          "n": 2,
+          "mean": 119.80986962505386,
+          "median": 119.80986962505386,
+          "std": 0.6127640999729621,
+          "minimum": 119.37657997469532,
+          "maximum": 120.24315927541242,
+          "ci95_low": 114.30449132759809,
+          "ci95_high": 125.31524792250964,
+          "ci95_halfwidth": 5.505378297455774
+        },
+        "replan_count": {
+          "n": 2,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 7.0710678118654755,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "ci95_low": -58.529999999999994,
+          "ci95_high": 68.53,
+          "ci95_halfwidth": 63.529999999999994
+        },
+        "plan_msgs": {
+          "n": 2,
+          "mean": 9.5,
+          "median": 9.5,
+          "std": 7.7781745930520225,
+          "minimum": 4.0,
+          "maximum": 15.0,
+          "ci95_low": -60.382999999999996,
+          "ci95_high": 79.383,
+          "ci95_halfwidth": 69.883
+        },
+        "first_replan_s": {
+          "n": 1,
+          "mean": 6.395196437835693,
+          "median": 6.395196437835693,
+          "std": null,
+          "minimum": 6.395196437835693,
+          "maximum": 6.395196437835693,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "obstacle_events": {
+          "n": 2,
+          "mean": 10.5,
+          "median": 10.5,
+          "std": 14.849242404917497,
+          "minimum": 0.0,
+          "maximum": 21.0,
+          "ci95_low": -122.91299999999998,
+          "ci95_high": 143.91299999999998,
+          "ci95_halfwidth": 133.41299999999998
+        },
+        "nav2_recoveries": {
+          "n": 2,
+          "mean": 2.0,
+          "median": 2.0,
+          "std": 2.8284271247461903,
+          "minimum": 0.0,
+          "maximum": 4.0,
+          "ci95_low": -23.412,
+          "ci95_high": 27.412,
+          "ci95_halfwidth": 25.412
+        },
+        "bt_compute_path_runs": {
+          "n": 2,
+          "mean": 17.0,
+          "median": 17.0,
+          "std": 15.556349186104045,
+          "minimum": 6.0,
+          "maximum": 28.0,
+          "ci95_low": -122.76599999999999,
+          "ci95_high": 156.766,
+          "ci95_halfwidth": 139.766
+        },
+        "bt_clear_costmap_runs": {
+          "n": 2,
+          "mean": 0.0,
+          "median": 0.0,
+          "std": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "ci95_low": 0.0,
+          "ci95_high": 0.0,
+          "ci95_halfwidth": 0.0
+        },
+        "bt_backup_runs": {
+          "n": 2,
+          "mean": 0.5,
+          "median": 0.5,
+          "std": 0.7071067811865476,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "ci95_low": -5.853,
+          "ci95_high": 6.853,
+          "ci95_halfwidth": 6.353
+        },
+        "map_coverage_ratio": {
+          "n": 2,
+          "mean": 0.37538594866181074,
+          "median": 0.37538594866181074,
+          "std": 2.4809719632457667e-06,
+          "minimum": 0.3753841943497116,
+          "maximum": 0.3753877029739099,
+          "ci95_low": 0.37536365837227903,
+          "ci95_high": 0.37540823895134245,
+          "ci95_halfwidth": 2.2290289531733615e-05
+        },
+        "map_known_area_m2": {
+          "n": 2,
+          "mean": 534.9475159426779,
+          "median": 534.9475159426779,
+          "std": 0.0035355340112387633,
+          "minimum": 534.9450159426035,
+          "maximum": 534.9500159427524,
+          "ci95_low": 534.9157509417317,
+          "ci95_high": 534.9792809436241,
+          "ci95_halfwidth": 0.031765000946121856
+        },
+        "map_occupied_cells": {
+          "n": 2,
+          "mean": 22257.0,
+          "median": 22257.0,
+          "std": 0.0,
+          "minimum": 22257.0,
+          "maximum": 22257.0,
+          "ci95_low": 22257.0,
+          "ci95_high": 22257.0,
+          "ci95_halfwidth": 0.0
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "repeatability": {
@@ -505,6 +702,206 @@
       "goal_success_rate": null,
       "goal_status_counts": {},
       "metrics": {},
+      "accuracy_succeeded_only": {}
+    },
+    "obstacle|lab-gercek|engel-1": {
+      "kind": "obstacle",
+      "environment": "lab-gercek",
+      "goal_name": "engel-1",
+      "run_count": 2,
+      "goal_success_rate": 0.0,
+      "goal_status_counts": {
+        "aborted": 2
+      },
+      "metrics": {
+        "duration_s": {
+          "n": 2,
+          "mean": 13.285572171211243,
+          "median": 13.285572171211243,
+          "std": 10.016279301975713,
+          "minimum": 6.202993154525757,
+          "maximum": 20.36815118789673,
+          "ci95_low": -76.70567681479453,
+          "ci95_high": 103.27682115721701,
+          "ci95_halfwidth": 89.99124898600577
+        },
+        "planned_path_len_m": {
+          "n": 2,
+          "mean": 5.296800016243464,
+          "median": 5.296800016243464,
+          "std": 0.6389548041180042,
+          "minimum": 4.844990741379901,
+          "maximum": 5.748609291107027,
+          "ci95_low": -0.44388863017296654,
+          "ci95_high": 11.037488662659893,
+          "ci95_halfwidth": 5.74068864641643
+        },
+        "actual_path_len_m": {
+          "n": 2,
+          "mean": 1.2692591681992038,
+          "median": 1.2692591681992038,
+          "std": 1.7950035298337075,
+          "minimum": 0.0,
+          "maximum": 2.5385183363984076,
+          "ci95_low": -14.85794782293988,
+          "ci95_high": 17.39646615933829,
+          "ci95_halfwidth": 16.127206991139083
+        },
+        "avg_speed_mps": {
+          "n": 2,
+          "mean": 0.06231587523532473,
+          "median": 0.06231587523532473,
+          "std": 0.08812795590894593,
+          "minimum": 0.0,
+          "maximum": 0.12463175047064946,
+          "ci95_low": -0.7294696355047112,
+          "ci95_high": 0.8541013859753608,
+          "ci95_halfwidth": 0.791785510740036
+        },
+        "linear_error_m": {
+          "n": 2,
+          "mean": 3.530499485055832,
+          "median": 3.530499485055832,
+          "std": 1.6266455417234966,
+          "minimum": 2.3802873919162826,
+          "maximum": 4.680711578195382,
+          "ci95_low": -11.084095370375282,
+          "ci95_high": 18.145094340486946,
+          "ci95_halfwidth": 14.614594855431115
+        },
+        "angular_error_deg": {
+          "n": 2,
+          "mean": 119.80986962505386,
+          "median": 119.80986962505386,
+          "std": 0.6127640999729621,
+          "minimum": 119.37657997469532,
+          "maximum": 120.24315927541242,
+          "ci95_low": 114.30449132759809,
+          "ci95_high": 125.31524792250964,
+          "ci95_halfwidth": 5.505378297455774
+        },
+        "replan_count": {
+          "n": 2,
+          "mean": 5.0,
+          "median": 5.0,
+          "std": 7.0710678118654755,
+          "minimum": 0.0,
+          "maximum": 10.0,
+          "ci95_low": -58.529999999999994,
+          "ci95_high": 68.53,
+          "ci95_halfwidth": 63.529999999999994
+        },
+        "plan_msgs": {
+          "n": 2,
+          "mean": 9.5,
+          "median": 9.5,
+          "std": 7.7781745930520225,
+          "minimum": 4.0,
+          "maximum": 15.0,
+          "ci95_low": -60.382999999999996,
+          "ci95_high": 79.383,
+          "ci95_halfwidth": 69.883
+        },
+        "first_replan_s": {
+          "n": 1,
+          "mean": 6.395196437835693,
+          "median": 6.395196437835693,
+          "std": null,
+          "minimum": 6.395196437835693,
+          "maximum": 6.395196437835693,
+          "ci95_low": null,
+          "ci95_high": null,
+          "ci95_halfwidth": null
+        },
+        "obstacle_events": {
+          "n": 2,
+          "mean": 10.5,
+          "median": 10.5,
+          "std": 14.849242404917497,
+          "minimum": 0.0,
+          "maximum": 21.0,
+          "ci95_low": -122.91299999999998,
+          "ci95_high": 143.91299999999998,
+          "ci95_halfwidth": 133.41299999999998
+        },
+        "nav2_recoveries": {
+          "n": 2,
+          "mean": 2.0,
+          "median": 2.0,
+          "std": 2.8284271247461903,
+          "minimum": 0.0,
+          "maximum": 4.0,
+          "ci95_low": -23.412,
+          "ci95_high": 27.412,
+          "ci95_halfwidth": 25.412
+        },
+        "bt_compute_path_runs": {
+          "n": 2,
+          "mean": 17.0,
+          "median": 17.0,
+          "std": 15.556349186104045,
+          "minimum": 6.0,
+          "maximum": 28.0,
+          "ci95_low": -122.76599999999999,
+          "ci95_high": 156.766,
+          "ci95_halfwidth": 139.766
+        },
+        "bt_clear_costmap_runs": {
+          "n": 2,
+          "mean": 0.0,
+          "median": 0.0,
+          "std": 0.0,
+          "minimum": 0.0,
+          "maximum": 0.0,
+          "ci95_low": 0.0,
+          "ci95_high": 0.0,
+          "ci95_halfwidth": 0.0
+        },
+        "bt_backup_runs": {
+          "n": 2,
+          "mean": 0.5,
+          "median": 0.5,
+          "std": 0.7071067811865476,
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "ci95_low": -5.853,
+          "ci95_high": 6.853,
+          "ci95_halfwidth": 6.353
+        },
+        "map_coverage_ratio": {
+          "n": 2,
+          "mean": 0.37538594866181074,
+          "median": 0.37538594866181074,
+          "std": 2.4809719632457667e-06,
+          "minimum": 0.3753841943497116,
+          "maximum": 0.3753877029739099,
+          "ci95_low": 0.37536365837227903,
+          "ci95_high": 0.37540823895134245,
+          "ci95_halfwidth": 2.2290289531733615e-05
+        },
+        "map_known_area_m2": {
+          "n": 2,
+          "mean": 534.9475159426779,
+          "median": 534.9475159426779,
+          "std": 0.0035355340112387633,
+          "minimum": 534.9450159426035,
+          "maximum": 534.9500159427524,
+          "ci95_low": 534.9157509417317,
+          "ci95_high": 534.9792809436241,
+          "ci95_halfwidth": 0.031765000946121856
+        },
+        "map_occupied_cells": {
+          "n": 2,
+          "mean": 22257.0,
+          "median": 22257.0,
+          "std": 0.0,
+          "minimum": 22257.0,
+          "maximum": 22257.0,
+          "ci95_low": 22257.0,
+          "ci95_high": 22257.0,
+          "ci95_halfwidth": 0.0
+        }
+      },
       "accuracy_succeeded_only": {}
     },
     "repeatability|lab-gercek|rota-A-B": {
