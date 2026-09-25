@@ -284,6 +284,12 @@ class TeleopNode(Node):
         self._goal_pose_sub = self.create_subscription(
             PoseStamped, "/goal_pose", self._goal_pose_cb, reliable_qos
         )
+        # Exploration is an explicit mode request, independent of Nav2 motion.
+        # Without this subscription, disabling direct fallback also prevented
+        # the A button from handing control from TELEOP to AUTO.
+        self._exploring_sub = self.create_subscription(
+            Bool, "/slam_manager/exploring", self._exploring_cb, latched_qos
+        )
 
         # Publish initial mode (TELEOP) immediately so late subscribers see it.
         self._publish_mode()
@@ -604,11 +610,14 @@ class TeleopNode(Node):
             if self._autonomous:
                 # Operator handed control back on purpose — let Nav2 drive.
                 self._auto_enable_inhibited = False
+                self._manual_teleop_lock = False
+                self._nav_auto_enable_blocked_until = 0.0
             else:
                 # Operator takeover: block auto re-entry and tell Nav2 to drop
                 # the running goal, otherwise it keeps replanning against a
                 # target the operator has already overridden.
                 self._auto_enable_inhibited = True
+                self._manual_teleop_lock = True
                 self._last_nav_motion_time = now_s
                 self._cancel_nav_goals()
             self._publish_mode()
@@ -743,10 +752,13 @@ class TeleopNode(Node):
         if not msg.data:
             return
         self._manual_teleop_lock = False
+        self._auto_enable_inhibited = False
+        self._nav_auto_enable_blocked_until = 0.0
         if not self._autonomous:
             self._autonomous = True
             self._last_mode_toggle_time = time.monotonic()
             self._handoff_stop_until = 0.0
+            self._publish_zero()
             self._publish_mode()
             self.get_logger().info("Keşif açıldı (A) -> AUTONOMOUS (Nav2)")
 
@@ -758,6 +770,7 @@ class TeleopNode(Node):
         if (
             self._auto_enable_on_nav_cmd
             and not self._autonomous
+            and not self._manual_teleop_lock
             and not self._auto_enable_inhibited
             and self._twist_has_motion(msg)
             and time.monotonic() >= self._nav_auto_enable_blocked_until

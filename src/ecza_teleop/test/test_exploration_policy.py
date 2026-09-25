@@ -34,6 +34,21 @@ class ExplorationPolicyTest(unittest.TestCase):
         for name in ('_blacklist_active_goal', '_cancel_goal'):
             setattr(self.n, name, getattr(Manager, name).__get__(self.n))
 
+    def test_toggle_waits_for_confirmed_auto_without_direct_motion(self):
+        self.n._exploring = self.n._autonomous = False
+        self.n._exploring_pub = Mock()
+        self.n._user_goal_until = time.monotonic()+60
+        Manager._toggle_exploration(self.n)
+        self.assertTrue(self.n._exploring)
+        self.assertFalse(self.n._autonomous)
+        self.assertTrue(self.n._exploring_pub.publish.call_args.args[0].data)
+        self.assertFalse(self.n._direct_explore_active)
+        self.assertEqual(self.n._user_goal_until, 0)
+        self.n._enable_direct_explore.assert_not_called()
+        self.n._record_visited_position = Mock()
+        Manager._explore_tick(self.n)
+        self.n._record_visited_position.assert_not_called()
+
     def test_unvisited_frontier_beats_arbitrarily_large_old_frontier(self):
         m, starts = two_rooms(80, 1)
         self.n._visited_penalty_radius_sq = 4.5**2

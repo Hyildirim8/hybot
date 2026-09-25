@@ -709,12 +709,10 @@ class SlamManagerNode(Node):
             self._reset_pid()
             self._publish_zero()
         else:
-            # Keşif açıldı: TELEOP modundaysa da doğrudan başlat.
-            # _direct_explore_tick cmd_vel_nav'a komut publish eder →
-            # teleop_node auto_enable_on_nav_cmd ile AUTO'ya geçer.
-            if not self._autonomous:
-                self._autonomous = True  # iyimser; _mode_cb ile doğrulanır
-            self._enable_direct_explore("keşif başlatıldı")
+            # /slam_manager/exploring requests AUTO; wait for teleop's mode
+            # acknowledgement instead of inferring mode from a motion command.
+            self._user_goal_until = 0.0
+            self._direct_explore_active = False
 
     def _explore_tick(self) -> None:
         """Keşif zamanlayıcısı: Nav2 hedefli frontier exploration.
@@ -733,12 +731,11 @@ class SlamManagerNode(Node):
             return
 
         if not self._autonomous:
-            # teleop_node auto_enable_on_nav_cmd ile geçiş yapana kadar
-            # _direct_explore_tick çalışmaya devam etsin (komut publish eder → otomatik geçiş).
             self.get_logger().warn(
-                "Keşif: AUTO mod bekleniyor (cmd_vel_nav tetikleyici gönderildi)",
+                "Keşif açık: teleop AUTO onayı bekleniyor",
                 throttle_duration_sec=2.0,
             )
+            self._pub_status("Keşif açık — AUTO onayı bekleniyor")
             return
 
         # Ziyaret edilen konumu periyodik kaydet (oda hafızası için)
@@ -981,6 +978,7 @@ class SlamManagerNode(Node):
     def _send_goal(self, wx: float, wy: float) -> None:
         if not self._nav.wait_for_server(timeout_sec=1.0):
             self.get_logger().warn("navigate_to_pose sunucusu hazır değil")
+            self._pub_status("Keşif açık — Nav2 hazırlanıyor, hedef tekrar denenecek")
             self._enable_direct_explore("Nav2 hazır değil")
             return
 
@@ -1028,7 +1026,8 @@ class SlamManagerNode(Node):
             # Reddedilme hedef konumunun kötü olduğunu göstermez — neredeyse her
             # zaman bt_navigator henüz aktif değil demektir. Kara listeye ALMA;
             # yoksa Nav2 açılırken tüm geçerli frontierlar kalıcı karartılıyor.
-            self.get_logger().warn("Keşif hedefi reddedildi (Nav2 hazır değil?) — fallback")
+            self.get_logger().warn("Keşif hedefi reddedildi — Nav2 hazır olunca tekrar denenecek")
+            self._pub_status("Keşif açık — Nav2 hedefi kabul etmedi, tekrar denenecek")
             self._active_goal = None
             self._enable_direct_explore("hedef reddedildi")
             return

@@ -12,6 +12,7 @@ from unittest.mock import Mock
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 from ecza_teleop.teleop_node import TeleopNode
 
 
@@ -33,6 +34,8 @@ class NavigationGateTest(unittest.TestCase):
             _auto_wheel_surface_limit=0.75, _pivot_k=0.32,
             _scan_points=[(3.0, 0.0)], _auto_strafe_invert=False,
             _auto_enable_on_nav_cmd=False, _auto_enable_inhibited=False,
+            _manual_teleop_lock=False, _nav_auto_enable_blocked_until=0.0,
+            _publish_mode=Mock(),
             _handoff_stop_until=0.0, _publish_cmd=Mock(), _publish_zero=Mock(),
             _front_angle_rad=math.radians(36), _lidar_angle_offset_rad=math.pi,
             _front_stop_distance=0.3, _front_clear_distance=0.5,
@@ -63,6 +66,34 @@ class NavigationGateTest(unittest.TestCase):
     def test_increased_speed_stops_with_obstacle_in_braking_distance(self):
         self.node._scan_points = [(0.65, 0.0)]
         self.assertEqual(self.node._apply_scan_safety(command(x=0.6)), Twist())
+
+    def test_exploration_request_enters_auto_without_motion_command(self):
+        self.node._autonomous = False
+        self.node._manual_teleop_lock = True
+        self.node._auto_enable_inhibited = True
+        self.node._nav_auto_enable_blocked_until = time.monotonic()+5
+        TeleopNode._exploring_cb(self.node, Bool(data=True))
+        self.assertTrue(self.node._autonomous)
+        self.assertFalse(self.node._manual_teleop_lock)
+        self.assertFalse(self.node._auto_enable_inhibited)
+        self.assertEqual(self.node._nav_auto_enable_blocked_until, 0.0)
+        self.node._publish_zero.assert_called_once()
+        self.node._publish_mode.assert_called_once()
+        self.node._publish_cmd.assert_not_called()
+
+    def test_stale_nav_motion_cannot_override_manual_takeover(self):
+        self.node._autonomous = False
+        self.node._manual_teleop_lock = True
+        self.node._auto_enable_on_nav_cmd = True
+        TeleopNode._nav_cmd_cb(self.node, command(x=0.2))
+        self.assertFalse(self.node._autonomous)
+        self.node._publish_cmd.assert_not_called()
+
+    def test_exploration_off_does_not_engage_auto(self):
+        self.node._autonomous = False
+        TeleopNode._exploring_cb(self.node, Bool(data=False))
+        self.assertFalse(self.node._autonomous)
+        self.node._publish_mode.assert_not_called()
 
     def test_lateral_direction_is_not_reversed(self):
         for y in (-0.15, 0.15):
