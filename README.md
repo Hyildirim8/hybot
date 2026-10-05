@@ -4,6 +4,19 @@ Mecanum tekerlekli, ROS 2 Humble tabanlı gezgin robot. Tüm yığın Raspberry 
 üzerinde Docker container'ları olarak çalışır; motorlar bir ESP32-S3 üzerinde
 micro-ROS ile sürülür.
 
+## Bağlı alt projeler
+
+Bu depo, eczane destek sisteminin robot ve otonom navigasyon katmanıdır. Görüntü
+işleme bileşenleri ayrı depolarda geliştirilir ve aşağıdaki bağlantılardan
+doğrudan açılabilir:
+
+| Alt proje | Görevi | GitHub |
+|---|---|---|
+| İlaç Tanıma Sistemi | Sekiz ilaç sınıfı için CNN/ViT eğitimi, karşılaştırma ve confusion matrix çıktıları | [Hyildirim8/ilac_tan-ma](https://github.com/Hyildirim8/ilac_tan-ma) |
+| Yüz Tanıma Sistemi | Kamera ile veri toplama, kayıtlı kişi tanıma, bilinmeyen kişi reddi ve çoklu model benchmarkı | [Hyildirim8/yuz_tanima](https://github.com/Hyildirim8/yuz_tanima) |
+
+Ana robot deposu: [Hyildirim8/hybot](https://github.com/Hyildirim8/hybot)
+
 | Bileşen | Donanım / Yazılım |
 |---|---|
 | Ana bilgisayar | Raspberry Pi 5, Docker Compose, ROS 2 Humble |
