@@ -3,8 +3,8 @@
 	url = https://github.com/micro-ROS/micro_ros_espidf_component.git
 	branch = humble
 [submodule "subprojects/medication-recognition"]
-	path = subprojects/medication-recognition
+	path = medication-recognition
 	url = https://github.com/Hyildirim8/ilac_tan-ma.git
 [submodule "subprojects/face-recognition"]
-	path = subprojects/face-recognition
+	path = face-recognition
 	url = https://github.com/Hyildirim8/yuz_tanima.git

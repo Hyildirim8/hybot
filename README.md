@@ -12,8 +12,8 @@ doğrudan açılabilir:
 
 | Alt proje | Görevi | GitHub |
 |---|---|---|
-| İlaç Tanıma Sistemi | Sekiz ilaç sınıfı için CNN/ViT eğitimi, karşılaştırma ve confusion matrix çıktıları | [Alt projeyi aç](subprojects/medication-recognition) |
-| Yüz Tanıma Sistemi | Kamera ile veri toplama, kayıtlı kişi tanıma, bilinmeyen kişi reddi ve çoklu model benchmarkı | [Alt projeyi aç](subprojects/face-recognition) |
+| İlaç Tanıma Sistemi | Sekiz ilaç sınıfı için CNN/ViT eğitimi, karşılaştırma ve confusion matrix çıktıları | [Alt projeyi aç](medication-recognition) |
+| Yüz Tanıma Sistemi | Kamera ile veri toplama, kayıtlı kişi tanıma, bilinmeyen kişi reddi ve çoklu model benchmarkı | [Alt projeyi aç](face-recognition) |
 
 Ana robot deposu: [Hyildirim8/hybot](https://github.com/Hyildirim8/hybot)
 
